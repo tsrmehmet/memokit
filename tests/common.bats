@@ -133,5 +133,5 @@ lib() { "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; $1"; }
   ln -s "$PROJ/src" "$outer/link"
   export CLAUDE_PROJECT_DIR="$outer/link"
   run lib 'mk_resolve_root "{}"; printf %s "$MK_ROOT"'
-  [ "$output" != "$outer" ]
+  [ "$output" = "$outer/link" ]
 }

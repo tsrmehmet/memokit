@@ -27,3 +27,17 @@ load helpers
     [ "$status" -eq 0 ] && [ -z "$output" ] || { echo "not silent: $h"; false; }
   done
 }
+
+@test "all 8 hooks silent in a legacy repo launched from a subdirectory" {
+  mk_project none; mkdir -p "$PROJ/.claude/hooks"   # legacy project shape
+  export CLAUDE_PROJECT_DIR="$PROJ/src"
+  p="$(jq -nc --arg f "$PROJ/src/A.cs" --arg cwd "$PROJ/src" '{tool_name:"Write",tool_input:{file_path:$f,content:"x"},agent_id:"a1",cwd:$cwd}')"
+  errf="$(mktemp "${BATS_TMPDIR:-/tmp}/mkerr.XXXXXX")"
+  for h in guard-edit.sh guard-subagent-authority.sh inject-rules.sh session-start.sh check-state-stale.sh check-context-budget.sh check-subagent-background.sh precompact-handoff.sh; do
+    rc=0
+    out="$(printf '%s' "$p" | "$MK_BASH" "$HOOKS/$h" 2>"$errf")" || rc=$?
+    [ "$rc" -eq 0 ] || { echo "rc=$rc: $h"; false; }
+    [ -z "$out" ] || { echo "stdout from $h: $out"; false; }
+    [ ! -s "$errf" ] || { echo "stderr from $h: $(cat "$errf")"; false; }
+  done
+}

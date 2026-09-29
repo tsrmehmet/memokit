@@ -48,15 +48,30 @@ emit_ctx() {
   exit 0
 }
 
+# True when the project carries a legacy .claude/hooks setup, either at
+# MK_ROOT or at the git top level. The second check matters for a launch from
+# a repo subdirectory: with no memokit.json to climb to, mk_resolve_root leaves
+# MK_ROOT at that subdirectory, where .claude/hooks never is. The top level is
+# reached via --show-cdup (logical form, as in mk_resolve_root).
+legacy_hooks_present() {
+  local cdup top
+  [ -d "$MK_ROOT/.claude/hooks" ] && return 0
+  cdup="$(git -C "$MK_ROOT" rev-parse --show-cdup 2>/dev/null)" || return 1
+  [ -n "$cdup" ] || return 1
+  top="$(cd "$MK_ROOT" && cd "$cdup" && pwd)" || return 1
+  [ -n "$top" ] && [ -d "$top/.claude/hooks" ]
+}
+
 if ! mk_active; then
   # Init hint: only in a project that (a) hasn't opted out, (b) has a
   # resolvable root, (c) is actually a git work tree, and (d) has no legacy
-  # .claude/hooks -- a project already carrying a legacy hook setup gets no
-  # unsolicited suggestion. This is the sole codepath that runs without an
-  # active memokit.json; everything below this block requires mk_active.
+  # .claude/hooks (at the root or the git top level) -- a project already
+  # carrying a legacy hook setup gets no unsolicited suggestion. This is the
+  # sole codepath that runs without an active memokit.json; everything below
+  # this block requires mk_active.
   if [ "${MEMOKIT_NO_INIT_HINT:-0}" != "1" ] && [ -n "$MK_ROOT" ] \
      && git -C "$MK_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-     && [ ! -d "$MK_ROOT/.claude/hooks" ]; then
+     && ! legacy_hooks_present; then
     lang="en"
     case "${LANG:-}" in tr*) lang="tr" ;; esac
     # mk_load_config (which normally loads messages) is never reached on

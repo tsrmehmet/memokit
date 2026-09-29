@@ -200,22 +200,16 @@ load_guard_roots() {
     wt_paths="$(printf '%s\n' "$wt_list" | sed -n 's/^worktree //p')"
   fi
   if [ -n "$wt_paths" ]; then
-    # ROOT's offset inside the checkout that contains it (longest match).
-    root_phys="$(cd -P "$ROOT" 2>/dev/null && pwd -P)" || root_phys=""
-    best=""
-    while IFS= read -r wt; do
-      [ -z "$wt" ] && continue
-      wt_phys="$(cd -P "$wt" 2>/dev/null && pwd -P)" || wt_phys="$wt"
-      case "$root_phys" in
-        "$wt_phys"|"$wt_phys"/*)
-          if [ "${#wt_phys}" -gt "${#best}" ]; then best="$wt_phys"; fi
-          ;;
-      esac
-    done <<WTEOF
-$wt_paths
-WTEOF
+    # ROOT's offset inside its own checkout, from git itself: --show-prefix
+    # is canonical (on-disk case), whereas comparing `pwd -P` spellings is
+    # not -- macOS `pwd -P` keeps whatever case CLAUDE_PROJECT_DIR was typed
+    # in. If git cannot say, the offset stays empty: every worktree top level
+    # becomes a root, which is stricter, never looser.
     offset=""
-    [ -n "$best" ] && offset="${root_phys#"$best"}"
+    if prefix="$(git -C "$ROOT" rev-parse --show-prefix 2>/dev/null)"; then
+      prefix="${prefix%/}"
+      [ -n "$prefix" ] && offset="/$prefix"
+    fi
     while IFS= read -r wt; do
       [ -z "$wt" ] && continue
       case "
@@ -817,6 +811,8 @@ CMD="$(printf '%s' "$PAYLOAD" | jq -r '.tool_input.command // ""' 2>/dev/null)" 
 # would require actually executing (or fully emulating) the command to see
 # what it does, which is a different and far more expensive mechanism than
 # text scanning.
+# Known gap of the same text-scan kind: a quoted ABSOLUTE target containing a
+# space (`echo x > "/My Repo/src/a.cs"`) is cut at the space and not caught.
 
 # Base directory for relative candidate paths: a shell command's relative
 # paths resolve against the shell's cwd, not this script's. Claude Code's

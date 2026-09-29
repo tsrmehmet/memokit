@@ -123,7 +123,7 @@ load helpers
 
 # --- 0.1.1: git worktrees and subdirectory launch ---------------------------
 # A linked worktree of $PROJ at $1 (detached, so no branch name collides).
-mk_worktree() { git -C "$PROJ" worktree add -q --detach "$1" >/dev/null 2>&1; WT="$1"; }
+mk_worktree() { git -C "$PROJ" worktree add -q --detach "$1" >/dev/null 2>&1 || return 1; WT="$1"; }
 # Write / Bash payloads whose session cwd is $3 / $2 (the worktree), the way
 # Claude Code reports it after EnterWorktree while CLAUDE_PROJECT_DIR stays put.
 wt_write_payload() {
@@ -227,4 +227,19 @@ wt_bash_payload() {
   export CLAUDE_PROJECT_DIR="$d/src"; PROJ="$d"
   run_hook guard-edit.sh "$(write_payload "$d/src/a.cs")"
   [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+@test "case-variant CLAUDE_PROJECT_DIR with the config in a repo subdir keeps the offset" {
+  mk_project none
+  mkdir -p "$PROJ/app/.claude" "$PROJ/app/src"
+  printf '%s' "$DEFAULT_CONFIG" > "$PROJ/app/.claude/memokit.json"
+  variant="$(dirname "$PROJ")/$(basename "$PROJ" | tr '[:lower:]' '[:upper:]')/app"
+  [ -d "$variant" ] || skip "case-sensitive filesystem"
+  export CLAUDE_PROJECT_DIR="$variant"
+  mk_worktree "$PROJ/.claude/worktrees/w"
+  run_hook guard-edit.sh "$(wt_write_payload "$PROJ/src/a.cs" "" "$PROJ")"
+  [ "$status" -eq 0 ]; [ "$(decision)" = "allow" ]
+  run_hook guard-edit.sh "$(wt_write_payload "$WT/src/a.cs" "" "$WT")"
+  [ "$status" -eq 0 ]; [ "$(decision)" = "allow" ]
+  run_hook guard-edit.sh "$(wt_write_payload "$WT/app/src/a.cs" "" "$WT")"
+  [ "$status" -eq 0 ]; [ "$(decision)" = "deny" ]
 }
