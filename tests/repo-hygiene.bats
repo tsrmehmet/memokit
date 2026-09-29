@@ -36,6 +36,6 @@ load helpers
   sed -n '1,4p' "$MK_REPO/CHANGELOG.md" | grep -qF '.claude-plugin/plugin.json'
 }
 @test "no references into docs/ from shipped files" {
-  run bash -c "cd '$MK_REPO' && git ls-files | grep -v '^docs/' | grep -v '^tests/repo-hygiene.bats\$' | xargs grep -n 'docs/specs\|docs/plans'; test \$? -eq 1"
+  run bash -c "cd '$MK_REPO' && git grep -n -e 'docs/specs' -e 'docs/plans' -- . ':!docs/' ':!tests/repo-hygiene.bats'; test \$? -eq 1"
   [ "$status" -eq 0 ]
 }

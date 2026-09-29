@@ -19,7 +19,10 @@ while [ $# -gt 0 ]; do
     *) P="$1"; shift ;;
   esac
 done
-[ -n "$P" ] && [ -d "$P" ] || { echo "usage: run.sh <project-root> [--tag-override TAG] [--self]" >&2; exit 2; }
+if ! { [ -n "$P" ] && [ -d "$P" ]; }; then
+  echo "usage: run.sh <project-root> [--tag-override TAG] [--self]" >&2
+  exit 2
+fi
 P="$(cd "$P" && pwd)"
 
 SB="$(mktemp -d "${TMPDIR:-/tmp}/mk-eq.XXXXXX")"; SB="$(cd "$SB" && pwd)"

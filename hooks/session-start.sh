@@ -112,7 +112,7 @@ HEALTH=""
 MISSING_LIST=""
 if [ -n "$MK_HEALTH_SCRIPT" ]; then
   if [ -x "$MK_ROOT/$MK_HEALTH_SCRIPT" ]; then
-    HEALTH="$(cd "$MK_ROOT" && MEMOKIT_KH_SMOKE=0 bash "$MK_HEALTH_SCRIPT" --fast 2>&1 || true)"
+    HEALTH="$(if cd "$MK_ROOT"; then MEMOKIT_KH_SMOKE=0 bash "$MK_HEALTH_SCRIPT" --fast 2>&1 || true; fi)"
   else
     HEALTH="$(mk_msg SS_HEALTH_SKIPPED)"
     MISSING_LIST="$MK_HEALTH_SCRIPT"

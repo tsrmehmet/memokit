@@ -385,7 +385,7 @@ cmd_extract_legacy() {
   fi
 
   if [ -d "$root/.claude/agents" ]; then
-    agents="$(cd "$root/.claude/agents" && find . -type f 2>/dev/null | sed 's|^\./||' | LC_ALL=C sort || true)"
+    agents="$(if cd "$root/.claude/agents"; then find . -type f 2>/dev/null | sed 's|^\./||' | LC_ALL=C sort || true; fi)"
   fi
   if [ -d "$root/.claude/skills" ]; then
     for d in "$root"/.claude/skills/*/; do
