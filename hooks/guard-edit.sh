@@ -116,14 +116,27 @@ deny() {
   exit 0
 }
 
-# True when directory $1 is the same inode as one of the guarded dirs.
+# True when directory $1 is the same inode as one of the guarded dirs under
+# root $2 (one of GUARD_ROOTS, see load_guard_roots below).
 dir_is_guarded() {
   local gd
   while IFS= read -r gd; do
     [ -z "$gd" ] && continue
-    [ "$1" -ef "$ROOT/$gd" ] && return 0
+    [ "$1" -ef "$2/$gd" ] && return 0
   done <<EOF
 $MK_GUARDED_DIRS
+EOF
+  return 1
+}
+
+# True when directory $1 is the same inode as a guarded dir under ANY root.
+dir_is_guarded_in_any_root() {
+  local r
+  while IFS= read -r r; do
+    [ -z "$r" ] && continue
+    dir_is_guarded "$1" "$r" && return 0
+  done <<EOF
+$GUARD_ROOTS
 EOF
   return 1
 }
@@ -151,6 +164,170 @@ if [ ! -f "$ROOT/.claude/memokit.json" ]; then
   deny "$(mk_msg GE_ROOT_UNKNOWN "$ROOT")"
 fi
 
+# --- guard roots: ROOT plus the same place in every git worktree ----------
+# A git worktree of this repository (Claude Code's EnterWorktree creates
+# <root>/.claude/worktrees/<name>; users also `git worktree add ../repo-wt`)
+# is a second checkout of the very same guarded dirs, but CLAUDE_PROJECT_DIR
+# -- and so ROOT -- stays at the main checkout while the session's cwd moves
+# into the worktree. Matching guarded dirs only as "$ROOT/<dir>" let the main
+# session write <root>/.claude/worktrees/w/src/a.cs freely. So every
+# root-relative check in classify_path (the lexical match, its case fold, and
+# the `-ef` walk) runs against each GUARD ROOT, with ROOT's own guardedDirs:
+#   - ROOT itself (the main checkout, covered exactly as before), then
+#   - for every `worktree <path>` line of `git worktree list --porcelain`,
+#     <path> plus ROOT's own offset inside its checkout. That offset is empty
+#     unless memokit.json sits in a repo SUBDIRECTORY, where it keeps a
+#     worktree's <wt>/app/src guarded without newly guarding <repo>/src.
+# If git is missing or the list fails, ROOT stays the only root: exactly the
+# pre-worktree coverage, never less. Loaded lazily from classify_path, so it
+# runs at most once per hook run and only once a write candidate exists.
+#
+# git prints worktree paths physically resolved (e.g. /private/var/... on
+# macOS) while ROOT and payload paths are usually logical (/var/...). A lexical
+# match between the two spellings would silently miss, so GUARD_ROOTS_LOWER
+# holds BOTH the raw and the `pwd -P` spelling of every root, and classify_path
+# matches the target's physical spelling as well as its normalized one.
+# Known gap: a worktree path containing a newline is cut at that newline by
+# the line-based porcelain parse, so that one worktree is not covered (ROOT
+# and every other root still are).
+load_guard_roots() {
+  [ "${GUARD_ROOTS_LOADED:-0}" = "1" ] && return 0
+  GUARD_ROOTS_LOADED=1
+  GUARD_ROOTS="$ROOT"
+  wt_paths=""
+  if command -v git >/dev/null 2>&1 && \
+     wt_list="$(git -C "$ROOT" worktree list --porcelain 2>/dev/null)"; then
+    wt_paths="$(printf '%s\n' "$wt_list" | sed -n 's/^worktree //p')"
+  fi
+  if [ -n "$wt_paths" ]; then
+    # ROOT's offset inside the checkout that contains it (longest match).
+    root_phys="$(cd -P "$ROOT" 2>/dev/null && pwd -P)" || root_phys=""
+    best=""
+    while IFS= read -r wt; do
+      [ -z "$wt" ] && continue
+      wt_phys="$(cd -P "$wt" 2>/dev/null && pwd -P)" || wt_phys="$wt"
+      case "$root_phys" in
+        "$wt_phys"|"$wt_phys"/*)
+          if [ "${#wt_phys}" -gt "${#best}" ]; then best="$wt_phys"; fi
+          ;;
+      esac
+    done <<WTEOF
+$wt_paths
+WTEOF
+    offset=""
+    [ -n "$best" ] && offset="${root_phys#"$best"}"
+    while IFS= read -r wt; do
+      [ -z "$wt" ] && continue
+      case "
+$GUARD_ROOTS
+" in
+        *"
+$wt$offset
+"*) : ;;
+        *) GUARD_ROOTS="$GUARD_ROOTS
+$wt$offset" ;;
+      esac
+    done <<WTEOF
+$wt_paths
+WTEOF
+  fi
+
+  # Lowercased spellings (raw and physical) of every root, for the lexical
+  # match. Same fail-closed handling as the single ROOT_LOWER this replaces.
+  GUARD_ROOTS_LOWER=""
+  while IFS= read -r r; do
+    [ -z "$r" ] && continue
+    r_phys="$(cd -P "$r" 2>/dev/null && pwd -P)" || r_phys=""
+    for s in "$r" "$r_phys"; do
+      [ -z "$s" ] && continue
+      s_lower="$(printf '%s' "$s" | tr '[:upper:]' '[:lower:]')" || \
+        deny "$(mk_msg GE_ROOT_LOWER_FAILED "$s")"
+      [ -z "$s_lower" ] && \
+        deny "$(mk_msg GE_ROOT_LOWER_EMPTY "$s")"
+      case "
+$GUARD_ROOTS_LOWER
+" in
+        *"
+$s_lower
+"*) : ;;
+        *) GUARD_ROOTS_LOWER="$GUARD_ROOTS_LOWER
+$s_lower" ;;
+      esac
+    done
+  done <<RTEOF
+$GUARD_ROOTS
+RTEOF
+
+  # The guarded dirs, lowercased once for every root and every candidate.
+  GUARDED_LOWER=""
+  while IFS= read -r gd; do
+    [ -z "$gd" ] && continue
+    gd_lower="$(printf '%s' "$gd" | tr '[:upper:]' '[:lower:]')" || \
+      deny "$(mk_msg GE_GUARDED_DIR_LOWER_FAILED "$gd")"
+    [ -z "$gd_lower" ] && \
+      deny "$(mk_msg GE_GUARDED_DIR_LOWER_EMPTY "$gd")"
+    GUARDED_LOWER="$GUARDED_LOWER
+$gd_lower"
+  done <<GDEOF
+$MK_GUARDED_DIRS
+GDEOF
+}
+
+# True when lowercased path $1 is a guarded dir under lowercased root $2, or
+# inside one. Matches both the bare directory (no trailing slash) and
+# everything under it.
+lexical_guarded_under() {
+  local gl
+  while IFS= read -r gl; do
+    [ -z "$gl" ] && continue
+    case "$1" in
+      "$2/$gl"|"$2/$gl"/*) return 0 ;;
+    esac
+  done <<EOF
+$GUARDED_LOWER
+EOF
+  return 1
+}
+
+# True when lowercased path $1 is inside a guarded dir under ANY root spelling.
+lexical_guarded_in_any_root() {
+  local rl
+  while IFS= read -r rl; do
+    [ -z "$rl" ] && continue
+    lexical_guarded_under "$1" "$rl" && return 0
+  done <<EOF
+$GUARD_ROOTS_LOWER
+EOF
+  return 1
+}
+
+# Sets PHYS_PATH to absolute, normalized path $1 with its deepest EXISTING
+# ancestor replaced by that ancestor's `pwd -P` spelling and the not-yet-
+# existing remainder appended unchanged (it has no "." / ".." left, since $1
+# is already normalized). Sets a global instead of printing, so the deny()
+# calls below exit the hook itself, not a command-substitution subshell.
+physical_spelling() {
+  p="$1"
+  rest=""
+  steps=0
+  while [ ! -d "$p" ] && [ "$p" != "/" ]; do
+    steps=$((steps + 1))
+    if [ "$steps" -gt 200 ]; then
+      deny "$(mk_msg GE_PARENT_DIR_LOOP "$1")"
+    fi
+    rest="/${p##*/}$rest"
+    p="${p%/*}"
+    [ -z "$p" ] && p="/"
+  done
+  p_phys="$(cd -P "$p" 2>/dev/null && pwd -P)" || p_phys=""
+  [ -z "$p_phys" ] && \
+    deny "$(mk_msg GE_PARENT_PHYS_FAILED "$p")"
+  [ "$p_phys" = "/" ] && p_phys=""
+  PHYS_PATH="$p_phys$rest"
+  [ -z "$PHYS_PATH" ] && PHYS_PATH="/"
+  return 0
+}
+
 # Lexically normalize an absolute path: collapse "." segments, resolve ".."
 # by popping the previous stacked segment, and collapse duplicate slashes.
 # Pure bash 3.2 (IFS=/ segment split + a stack) -- no external tools, no
@@ -162,7 +339,8 @@ fi
 # The guard as a WHOLE does not stop at this lexical text match: classify_path
 # below also runs an inode-identity check (`-ef`, via dir_is_guarded) that
 # walks up from the target path and compares device+inode against each of
-# the guarded dirs (memokit.json guardedDirs) under "$ROOT". `-ef` asks the
+# the guarded dirs (memokit.json guardedDirs) under every guard root ("$ROOT"
+# and its worktree counterparts, see load_guard_roots). `-ef` asks the
 # filesystem directly, so it transparently follows symlinks and reproduces
 # whatever case/Unicode folding the OS itself applies.
 # Prints the normalized absolute path and returns 0, or prints nothing and
@@ -210,7 +388,8 @@ normalize_path() {
 }
 
 # classify_path: the single authority for "does this path identify a location
-# inside one of the guarded dirs (memokit.json guardedDirs) under $ROOT".
+# inside one of the guarded dirs (memokit.json guardedDirs) under $ROOT or
+# under the same place in any git worktree of it" (see load_guard_roots).
 # Used by BOTH the Edit/Write branch (one call, on tool_input.file_path) and
 # the Bash branch (one call per candidate write-target extracted from the
 # command text) -- there is exactly one implementation of this logic in the
@@ -343,15 +522,11 @@ classify_path() {
   [ -z "$NORM_PATH_LOWER" ] && \
     deny "$(mk_msg GE_PATH_LOWER_EMPTY "$NORM_PATH")"
 
-  # ROOT_LOWER is the same for every call in this process -- computed once
-  # and memoized, instead of re-running tr on every candidate path a Bash
-  # command might produce.
-  if [ -z "${ROOT_LOWER:-}" ]; then
-    ROOT_LOWER="$(printf '%s' "$ROOT" | tr '[:upper:]' '[:lower:]')" || \
-      deny "$(mk_msg GE_ROOT_LOWER_FAILED "$ROOT")"
-    [ -z "$ROOT_LOWER" ] && \
-      deny "$(mk_msg GE_ROOT_LOWER_EMPTY "$ROOT")"
-  fi
+  # The lowered root spellings (ROOT and every worktree counterpart, see
+  # load_guard_roots) and the lowered guarded dirs are the same for every call
+  # in this process -- computed once and memoized, instead of re-running tr
+  # on every candidate path a Bash command might produce.
+  load_guard_roots
 
   # NOTE: `tr '[:upper:]' '[:lower:]'` above only folds ASCII case. It does
   # NOT reproduce APFS's own Unicode case-folding (e.g. U+017F "ſ" LATIN
@@ -364,20 +539,28 @@ classify_path() {
   # Cheap lexical PRE-FILTER, not the sole authority -- see the inode-identity
   # check immediately below for why. Matches both the bare directory (no
   # trailing slash) and everything under it, for every configured guarded dir
-  # (memokit.json guardedDirs).
+  # (memokit.json guardedDirs), under every guard root spelling.
   LEXICAL_MATCH=0
-  while IFS= read -r gd; do
-    [ -z "$gd" ] && continue
-    gd_lower="$(printf '%s' "$gd" | tr '[:upper:]' '[:lower:]')" || \
-      deny "$(mk_msg GE_GUARDED_DIR_LOWER_FAILED "$gd")"
-    [ -z "$gd_lower" ] && \
-      deny "$(mk_msg GE_GUARDED_DIR_LOWER_EMPTY "$gd")"
-    case "$NORM_PATH_LOWER" in
-      "$ROOT_LOWER/$gd_lower"|"$ROOT_LOWER/$gd_lower"/*) LEXICAL_MATCH=1; break ;;
-    esac
-  done <<EOF
-$MK_GUARDED_DIRS
-EOF
+  if lexical_guarded_in_any_root "$NORM_PATH_LOWER"; then
+    LEXICAL_MATCH=1
+  fi
+
+  # Same lexical match on the PHYSICAL spelling of the target (deepest
+  # existing ancestor through `pwd -P`). Needed because git reports worktree
+  # roots physically resolved while a payload path is usually logical (see
+  # load_guard_roots); it also covers a physically spelled target under a
+  # logical ROOT whose guarded dir does not exist yet (where `-ef` cannot
+  # help). It can only add denies.
+  if [ "$LEXICAL_MATCH" -eq 0 ]; then
+    physical_spelling "$NORM_PATH"
+    PHYS_PATH_LOWER="$(printf '%s' "$PHYS_PATH" | tr '[:upper:]' '[:lower:]')" || \
+      deny "$(mk_msg GE_PATH_LOWER_FAILED "$PHYS_PATH")"
+    [ -z "$PHYS_PATH_LOWER" ] && \
+      deny "$(mk_msg GE_PATH_LOWER_EMPTY "$PHYS_PATH")"
+    if lexical_guarded_in_any_root "$PHYS_PATH_LOWER"; then
+      LEXICAL_MATCH=1
+    fi
+  fi
 
   # --- inode-identity check (why it exists, replacing lexical-only) --------
   # The ASCII `tr` fold above cannot see APFS's Unicode case-folding, e.g.
@@ -406,9 +589,9 @@ EOF
   # applied to NORM_PATH directly. Walk up from the parent, first lexically
   # (cheap string chop) until an existing directory is found, then from there
   # keep walking up comparing that directory's identity against each guarded
-  # dir under "$ROOT" (via dir_is_guarded) with `-ef` at every level up to
-  # "/". Both loops are hard-capped at 200 iterations and deny() outright if
-  # the cap is hit.
+  # dir under every guard root (via dir_is_guarded_in_any_root) with `-ef` at
+  # every level up to "/". Both loops are hard-capped at 200 iterations and
+  # deny() outright if the cap is hit.
   #
   # WHY the walk must start from the RAW $ABS_PATH, not $NORM_PATH: if some
   # ancestor directory in the path is a symlink whose TARGET is a
@@ -465,7 +648,7 @@ EOF
       if [ "$steps" -gt 200 ]; then
         deny "$(mk_msg GE_INODE_LOOP "$NORM_PATH")"
       fi
-      if dir_is_guarded "$d"; then
+      if dir_is_guarded_in_any_root "$d"; then
         INODE_MATCH=1
         break
       fi

@@ -120,3 +120,111 @@ load helpers
     [ "$(decision)" = "allow" ] || { echo "denied: $c"; false; }
   done
 }
+
+# --- 0.1.1: git worktrees and subdirectory launch ---------------------------
+# A linked worktree of $PROJ at $1 (detached, so no branch name collides).
+mk_worktree() { git -C "$PROJ" worktree add -q --detach "$1" >/dev/null 2>&1; WT="$1"; }
+# Write / Bash payloads whose session cwd is $3 / $2 (the worktree), the way
+# Claude Code reports it after EnterWorktree while CLAUDE_PROJECT_DIR stays put.
+wt_write_payload() {
+  jq -nc --arg p "$1" --arg a "${2:-}" --arg cwd "$3" \
+    '{tool_name:"Write",tool_input:{file_path:$p,content:"x"},cwd:$cwd} + (if $a=="" then {} else {agent_id:$a} end)'
+}
+wt_bash_payload() {
+  jq -nc --arg c "$1" --arg cwd "$2" '{tool_name:"Bash",tool_input:{command:$c},cwd:$cwd}'
+}
+
+@test "worktree in .claude/worktrees: main-session write to src is denied" {
+  mk_project; mk_worktree "$PROJ/.claude/worktrees/w"
+  run_hook guard-edit.sh "$(wt_write_payload "$WT/src/a.cs" "" "$WT")"
+  [ "$status" -eq 0 ]
+  [ "$(decision)" = "deny" ]
+}
+@test "worktree in .claude/worktrees: subagent write to src is allowed" {
+  mk_project; mk_worktree "$PROJ/.claude/worktrees/w"
+  run_hook guard-edit.sh "$(wt_write_payload "$WT/src/a.cs" agent-1 "$WT")"
+  [ "$status" -eq 0 ]
+  [ "$(decision)" = "allow" ]
+}
+@test "worktree in .claude/worktrees: docs write is allowed" {
+  mk_project; mk_worktree "$PROJ/.claude/worktrees/w"
+  run_hook guard-edit.sh "$(wt_write_payload "$WT/docs/a.md" "" "$WT")"
+  [ "$status" -eq 0 ]
+  [ "$(decision)" = "allow" ]
+}
+@test "worktree in .claude/worktrees: bash redirect into src with worktree cwd is denied" {
+  mk_project; mk_worktree "$PROJ/.claude/worktrees/w"
+  run_hook guard-edit.sh "$(wt_bash_payload 'echo x > src/a.cs' "$WT")"
+  [ "$status" -eq 0 ]
+  [ "$(decision)" = "deny" ]
+}
+@test "worktree in .claude/worktrees: quoted bash redirect into src with worktree cwd is denied" {
+  mk_project; mk_worktree "$PROJ/.claude/worktrees/w"
+  run_hook guard-edit.sh "$(wt_bash_payload 'echo x > "src/a.cs"' "$WT")"
+  [ "$status" -eq 0 ]
+  [ "$(decision)" = "deny" ]
+}
+@test "worktree outside the root: main-session write to src is denied" {
+  mk_project
+  base="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkwt.XXXXXX")"
+  mk_worktree "$base/wt"
+  run_hook guard-edit.sh "$(wt_write_payload "$WT/src/a.cs" "" "$WT")"
+  [ "$status" -eq 0 ]
+  [ "$(decision)" = "deny" ]
+}
+@test "worktree in .claude/worktrees: uppercase SRC variant is denied" {
+  mk_project; mk_worktree "$PROJ/.claude/worktrees/w"
+  run_hook guard-edit.sh "$(wt_write_payload "$WT/SRC/a.cs" "" "$WT")"
+  [ "$status" -eq 0 ]
+  [ "$(decision)" = "deny" ]
+}
+@test "worktree in .claude/worktrees: symlink inside it pointing into its src is denied" {
+  mk_project; mk_worktree "$PROJ/.claude/worktrees/w"
+  mkdir -p "$WT/src/sub"
+  ln -s src/sub "$WT/lnk"
+  run_hook guard-edit.sh "$(wt_write_payload "$WT/lnk/pwn.cs" "" "$WT")"
+  [ "$status" -eq 0 ]
+  [ "$(decision)" = "deny" ]
+}
+@test "worktree coverage keeps the root's own offset when the config sits in a repo subdir" {
+  # Config at <repo>/app: the main checkout's <repo>/src is NOT guarded (as
+  # before), the worktree's counterpart <wt>/app/src IS.
+  mk_project none
+  mkdir -p "$PROJ/app/.claude" "$PROJ/app/src"
+  printf '%s' "$DEFAULT_CONFIG" > "$PROJ/app/.claude/memokit.json"
+  export CLAUDE_PROJECT_DIR="$PROJ/app"
+  mk_worktree "$PROJ/.claude/worktrees/w"
+  run_hook guard-edit.sh "$(wt_write_payload "$PROJ/src/a.cs" "" "$PROJ")"
+  [ "$status" -eq 0 ]; [ "$(decision)" = "allow" ]
+  run_hook guard-edit.sh "$(wt_write_payload "$WT/src/a.cs" "" "$WT")"
+  [ "$status" -eq 0 ]; [ "$(decision)" = "allow" ]
+  run_hook guard-edit.sh "$(wt_write_payload "$WT/app/src/a.cs" "" "$WT")"
+  [ "$status" -eq 0 ]; [ "$(decision)" = "deny" ]
+}
+@test "without git on PATH the root itself stays guarded" {
+  mk_project; mk_worktree "$PROJ/.claude/worktrees/w"
+  p="$(write_payload "$PROJ/src/A.cs")"
+  run env PATH="$(path_without git)" "$MK_BASH" -c 'printf "%s" "$1" | "$0" "$2"' "$MK_BASH" "$p" "$HOOKS/guard-edit.sh"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | /usr/bin/env jq -r .hookSpecificOutput.permissionDecision)" = "deny" ]
+}
+@test "subdirectory launch: main-session write under the root's src is denied" {
+  mk_project
+  export CLAUDE_PROJECT_DIR="$PROJ/src"
+  run_hook guard-edit.sh "$(jq -nc --arg p "$PROJ/src/a.cs" --arg cwd "$PROJ/src" '{tool_name:"Write",tool_input:{file_path:$p,content:"x"},cwd:$cwd}')"
+  [ "$status" -eq 0 ]
+  [ "$(decision)" = "deny" ]
+}
+@test "subdirectory launch in a repo without config stays silent" {
+  mk_project none
+  export CLAUDE_PROJECT_DIR="$PROJ/src"
+  run_hook guard-edit.sh "$(write_payload "$PROJ/src/a.cs")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+@test "non-git directory without config stays silent" {
+  d="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mknogit.XXXXXX")"
+  mkdir -p "$d/src"
+  export CLAUDE_PROJECT_DIR="$d/src"; PROJ="$d"
+  run_hook guard-edit.sh "$(write_payload "$d/src/a.cs")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
