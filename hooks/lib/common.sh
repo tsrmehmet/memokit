@@ -13,7 +13,7 @@ MK_TAG="MEMOKIT"
 MK_LANG="en"
 
 mk_resolve_root() {
-  local cwd cdup
+  local cwd cdup top
   MK_ROOT="${CLAUDE_PROJECT_DIR:-}"
   if [ -z "$MK_ROOT" ] && command -v jq >/dev/null 2>&1; then
     cwd="$(printf '%s' "${1:-}" | jq -r '.cwd // empty' 2>/dev/null)"
@@ -33,6 +33,21 @@ mk_resolve_root() {
     MK_ROOT="$(cd "$MK_ROOT" && pwd)"
   else
     MK_ROOT=""
+  fi
+  # Subdirectory launch (Claude started in <repo>/src): CLAUDE_PROJECT_DIR is
+  # that subdirectory, which has no config of its own. Fall back to the git
+  # top level -- and only to it, never further up -- when THAT holds the
+  # config. A root that already has a config is used as-is. --show-cdup keeps
+  # the logical (unresolved-symlink) form, as in the cwd branch above; the
+  # -ef against --show-toplevel rejects a logical ".." that climbed out of a
+  # symlinked subdirectory to somewhere other than the real top level.
+  if [ -n "$MK_ROOT" ] && [ ! -f "$MK_ROOT/.claude/memokit.json" ] &&
+     cdup="$(git -C "$MK_ROOT" rev-parse --show-cdup 2>/dev/null)" && [ -n "$cdup" ]; then
+    top="$(cd "$MK_ROOT" && cd "$cdup" && pwd)" || top=""
+    if [ -n "$top" ] && [ -f "$top/.claude/memokit.json" ] &&
+       [ "$top" -ef "$(git -C "$MK_ROOT" rev-parse --show-toplevel 2>/dev/null)" ]; then
+      MK_ROOT="$top"
+    fi
   fi
   MK_CONFIG="${MK_ROOT:+$MK_ROOT/.claude/memokit.json}"
 }

@@ -86,3 +86,52 @@ lib() { "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; $1"; }
   run lib 'mk_resolve_root "{}"; mk_load_config; mk_dirs_human'
   [ "$output" = "src/, web/" ]
 }
+
+@test "subdirectory launch resolves to the git top level holding the config (logical form)" {
+  mk_project
+  export CLAUDE_PROJECT_DIR="$PROJ/src"
+  run lib 'mk_resolve_root "{}"; mk_active && printf "on:%s" "$MK_ROOT"'
+  [ "$output" = "on:$PROJ" ]
+}
+
+@test "a subdirectory that has its own config is used as-is" {
+  mk_project
+  mkdir -p "$PROJ/src/.claude"; printf '%s' "$DEFAULT_CONFIG" > "$PROJ/src/.claude/memokit.json"
+  export CLAUDE_PROJECT_DIR="$PROJ/src"
+  run lib 'mk_resolve_root "{}"; printf %s "$MK_ROOT"'
+  [ "$output" = "$PROJ/src" ]
+}
+
+@test "subdirectory of a repo without config stays inactive" {
+  mk_project none
+  export CLAUDE_PROJECT_DIR="$PROJ/src"
+  run lib 'mk_resolve_root "{}"; mk_active && echo on || echo off'
+  [ "$output" = "off" ]
+}
+
+@test "never walks above the git top level" {
+  # A config ABOVE the repo must not activate it.
+  outer="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkouter.XXXXXX")"; outer="$(cd "$outer" && pwd)"
+  mkdir -p "$outer/.claude" "$outer/repo/src"; printf '%s' "$DEFAULT_CONFIG" > "$outer/.claude/memokit.json"
+  git -C "$outer/repo" init -q
+  export CLAUDE_PROJECT_DIR="$outer/repo/src"
+  run lib 'mk_resolve_root "{}"; mk_active && echo on || echo off'
+  [ "$output" = "off" ]
+}
+
+@test "non-git directory without config stays inactive" {
+  d="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mknogit.XXXXXX")"; mkdir -p "$d/src"
+  export CLAUDE_PROJECT_DIR="$d/src"
+  run lib 'mk_resolve_root "{}"; mk_active && echo on || echo off'
+  [ "$output" = "off" ]
+}
+
+@test "symlinked subdirectory launch does not climb to the symlink's logical parent" {
+  mk_project
+  outer="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkouter.XXXXXX")"; outer="$(cd "$outer" && pwd)"
+  mkdir -p "$outer/.claude"; printf '%s' "$DEFAULT_CONFIG" > "$outer/.claude/memokit.json"
+  ln -s "$PROJ/src" "$outer/link"
+  export CLAUDE_PROJECT_DIR="$outer/link"
+  run lib 'mk_resolve_root "{}"; printf %s "$MK_ROOT"'
+  [ "$output" != "$outer" ]
+}
