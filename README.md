@@ -8,7 +8,7 @@ This is personal infrastructure shared as-is. MIT licensed, no support guarantee
 
 | Kind | Name | What it does |
 |---|---|---|
-| Hook | `guard-edit.sh` | PreToolUse: blocks the main session from writing under the guarded dirs (Edit/Write and Bash write constructs). |
+| Hook | `guard-edit.sh` | PreToolUse: blocks the main session from writing under the guarded dirs (Edit/Write and Bash write constructs), in the main checkout and in every git worktree of the repo (including Claude Code worktrees). |
 | Hook | `guard-subagent-authority.sh` | PreToolUse: blocks subagents from committing, merging, rewriting history, touching the remote, or delegating. |
 | Hook | `inject-rules.sh` | UserPromptSubmit: re-injects the core rules (plus your `rules.md`) and keyword-gated skill hints. |
 | Hook | `session-start.sh` | SessionStart: injects `docs/STATE.md`, tracked docs, health-script summary and a settings risk scan. |
