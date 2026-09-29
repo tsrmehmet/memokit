@@ -1,0 +1,11 @@
+{
+  "name": "memokit",
+  "version": "0.1.0",
+  "description": "Orchestrator/coder guardrails, session rituals (handoff/resume) and a context budget for Claude Code, configured per project.",
+  "author": { "name": "Mehmet Taşar" },
+  "license": "MIT",
+  "homepage": "https://github.com/tsrmehmet/memokit",
+  "repository": "https://github.com/tsrmehmet/memokit",
+  "keywords": ["hooks", "guardrails", "handoff", "subagents", "workflow"],
+  "defaultEnabled": false
+}

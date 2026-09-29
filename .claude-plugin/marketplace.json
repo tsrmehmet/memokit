@@ -1,0 +1,11 @@
+{
+  "name": "memokit",
+  "owner": { "name": "Mehmet Taşar" },
+  "plugins": [
+    {
+      "name": "memokit",
+      "source": "./",
+      "description": "Orchestrator/coder guardrails, session rituals and a context budget for Claude Code."
+    }
+  ]
+}

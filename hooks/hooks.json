@@ -1,0 +1,29 @@
+{
+  "description": "memokit: orchestrator/coder guardrails, session rituals and context budget. Active only in projects with .claude/memokit.json.",
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "startup|resume|clear|compact",
+        "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh\"", "timeout": 15 } ] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/inject-rules.sh\"", "timeout": 5 } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+        "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/guard-edit.sh\"", "timeout": 5 } ] },
+      { "matcher": "Bash|Agent|Task|SendMessage",
+        "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/guard-subagent-authority.sh\"", "timeout": 5 } ] }
+    ],
+    "Stop": [
+      { "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-state-stale.sh\"", "timeout": 8 },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-context-budget.sh\"", "timeout": 8 } ] }
+    ],
+    "SubagentStop": [
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-subagent-background.sh\"", "timeout": 5 } ] }
+    ],
+    "PreCompact": [
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/precompact-handoff.sh\"", "timeout": 5 } ] }
+    ]
+  }
+}

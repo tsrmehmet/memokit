@@ -1,0 +1,12 @@
+BF	E04*	allow→deny	Legacy BF generation did not scan Bash writes (§9.3)
+BF	E06	allow→deny	Legacy BF generation allowed empty stdin (§9.3)
+BF	S04	allow→deny	Legacy BF generation had no SendMessage coverage
+BF	S08	allow→deny	Legacy BF generation had no remote-mutation coverage
+BF	S01	allow→deny	Legacy BF generation had no subagent push coverage (spec: subagent git push is denied)
+BF	S07	allow→deny	Legacy BF generation had no subagent rebase coverage (subagents do not own history)
+BF	P0[1-6]	*	Legacy BF had no keyword hints; builtin hints now on
+SBX	P05	*	Handoff hint newly enabled (builtin)
+SBX	P06	*	Resume hint newly enabled (builtin)
+SD	P05	*	Handoff hint newly enabled (builtin)
+SD	P06	*	Resume hint newly enabled (builtin)
+*	P02	*	Decision hint keywords unified (superset of legacy)

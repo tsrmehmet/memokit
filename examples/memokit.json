@@ -1,0 +1,17 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tsrmehmet/memokit/main/schema/memokit.schema.json",
+  "version": 1,
+  "project": { "name": "Acme Shop", "tag": "ACME" },
+  "language": "en",
+  "guardedDirs": ["src", "tests", "web"],
+  "contextBudget": { "limitTokens": 300000 },
+  "stateStale": { "maxCommitsBehind": 3 },
+  "sessionStart": {
+    "docs": ["docs/ROADMAP.md — roadmap and locked decisions"],
+    "healthScript": "scripts/knowledge-health.sh"
+  },
+  "hints": {
+    "builtin": ["debugging", "decision", "review", "handoff", "resume", "graphify"],
+    "custom": [ { "match": "mockup|react|tailwind", "text": "Frontend work → frontend-design skill." } ]
+  }
+}

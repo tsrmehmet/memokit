@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/tsrmehmet/memokit/main/schema/memokit.schema.json",
+  "title": "memokit project configuration",
+  "type": "object",
+  "required": ["version", "project"],
+  "additionalProperties": true,
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "const": 1 },
+    "project": {
+      "type": "object",
+      "required": ["name", "tag"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "description": "Shown in the session-start header." },
+        "tag": { "type": "string", "pattern": "^[A-Z][A-Z0-9]{1,9}$", "description": "Message tag, e.g. ABC → [ABC-KURAL]." }
+      }
+    },
+    "language": { "enum": ["en", "tr"], "default": "en" },
+    "guardedDirs": {
+      "type": "array", "minItems": 1, "default": ["src", "tests"],
+      "items": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$" },
+      "description": "Repo-relative directories the main session may not write to."
+    },
+    "contextBudget": { "type": "object", "properties": { "limitTokens": { "type": "integer", "minimum": 1000, "default": 300000 } } },
+    "stateStale": { "type": "object", "properties": { "maxCommitsBehind": { "type": "integer", "minimum": 0, "default": 3 } } },
+    "sessionStart": {
+      "type": "object",
+      "properties": {
+        "docs": { "type": "array", "items": { "type": "string" }, "description": "\"path — description\" lines shown at session start." },
+        "healthScript": { "type": "string", "description": "Repo-relative script run with --fast at session start." }
+      }
+    },
+    "hints": {
+      "type": "object",
+      "properties": {
+        "builtin": { "type": "array", "items": { "enum": ["debugging", "decision", "review", "handoff", "resume", "graphify"] } },
+        "custom": { "type": "array", "items": { "type": "object", "required": ["match", "text"], "properties": { "match": { "type": "string" }, "text": { "type": "string" } } } }
+      }
+    }
+  }
+}
