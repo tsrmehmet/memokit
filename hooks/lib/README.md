@@ -3,6 +3,9 @@
 `common.sh` is sourced by every hook in `hooks/*.sh`; it is never executed
 directly. `config.jq` is the config-parsing/validation program `mk_load_config`
 runs via `jq -r -f`.
+`graph.sh` (code-graph staleness) is sourced after `mk_load_config` by
+`inject-rules.sh` and `skills/handoff/scripts/memokit-graph.sh`, so the hint and
+the handoff refresh share one definition of "stale".
 
 Every hook in this plugin starts with one of the two canonical preambles
 below, copied verbatim (only `<hook-name>` changes). This keeps the gate

@@ -72,6 +72,23 @@ Requirements: bash, jq, git; macOS or Linux.
 | `sessionStart.healthScript` | no | none | Repo-relative script run with `--fast` at session start. |
 | `hints.builtin` | no | all | Any of `debugging`, `decision`, `review`, `handoff`, `resume`, `graphify`. |
 | `hints.custom[]` | no | `[]` | `{ "match": "<regex>", "text": "<hint>" }` project-specific keyword hints. |
+| `graph.root` | no | none | Enables the code graph (see below): repo-relative directory the graph covers (`.` = whole repo). |
+| `graph.maxCommitsBehind` | no | `20` | Commits under `graph.root` since the last refresh before the codebase-question hint says "refresh first". |
+| `graph.refreshScript` | no | none | Repo-relative script that replaces the builtin refresh (run from the repo root; exit 0 = refreshed). |
+
+## Code graph (graphify)
+
+With `graph` set in `.claude/memokit.json`, memokit keeps a graphify code graph in `graphify-out/` current:
+
+- **At every handoff** `/memokit:handoff` runs `skills/handoff/scripts/memokit-graph.sh refresh` after its commit. It does nothing when no commit touched `graph.root` since the last refresh; otherwise it runs `graphify update <graph.root>` (code only, AST extraction, no LLM tokens) and moves the marker `graphify-out/.graph_commit` to `HEAD`. A failed refresh keeps the previous graph and is reported as a warning; it does not fail the handoff.
+- **On a codebase question** ("where is", "who calls", …) the hint carries the measured staleness: fresh → query directly; more than `maxCommitsBehind` commits behind → refresh before answering.
+- `graphify-out/` must be git-ignored; the refresh refuses otherwise. graphify does not read nested `.gitignore` files, so put build output and secrets under the root into a `.graphifyignore` at the repo root.
+
+`/memokit:init` offers the graph with a measured recommendation. In a project without `graph`, the hint tells the AI to ask you before building one rather than building it on its own. `memokit-graph.sh status` prints the staleness (exit 0 fresh, 1 stale, 2 unknown, 3 no graph).
+
+## Handoff notification
+
+The last step of `/memokit:handoff` sends one line through Claude Code's `PushNotification` tool: "handoff ready, next: …" or "handoff not complete: …". The tool skips the push while you are at the terminal and reaches your phone when Remote Control is connected, so an autonomous handoff at the context budget tells you when to open a new session.
 
 ## Overlays
 
@@ -93,7 +110,7 @@ Every turn re-sends the whole context, so cost grows roughly with its square. Wh
 
 1. Finish the current work, then hand off (if it closes in a few turns), or hand off now (if the remaining work is long or you are at a natural stopping point).
 2. Tell you in one line which it chose and why.
-3. Run `/memokit:handoff` completely, then verify the handoff by measurement.
+3. Run `/memokit:handoff` completely, through its phone notification, then verify the handoff by measurement.
 4. Only when every check passes, say the handoff is current and that "continue" is enough next session. If a check fails, fix and re-measure, or report what failed.
 
 The reminder fires once when the budget is crossed and again every step of tokens after that. Environment variables (must be valid non-negative integers, otherwise the default applies; `MEMOKIT_CONTEXT_STEP` must be above zero):
@@ -159,7 +176,7 @@ memokit'i **proje başına** kurup etkinleştirin (projenin kök dizininde):
 
 `/plugin install` penceresinde projeye özel bir kapsam seçin (kabukta: `claude plugin install memokit@memokit --scope local`). Manifest `"defaultEnabled": false` ayarladığı için kurulum tek başına yetmez, plugin kapalı kurulur ve `/memokit:init` çalışmaz. Projede etkinleştirin: `/plugin` menüsünden ya da kabukta `claude plugin enable memokit@memokit --scope local`. Etkinleştirilmemiş projelerde memokit kapalı kalır. `/memokit:init`, projenin `.claude/settings.json` dosyasına `enabledPlugins["memokit@memokit"] = true` yazar. Başka projeler hâlâ kendi depo-içi hook'larıyla çalışırken memokit'i kullanıcı düzeyinde (user level) etkinleştirmeyin: memokit'in ajan ve skill'leri o projelerin kendi coder/reviewer/handoff/resume'u ile yan yana görünür.
 
-Ardından git deposunda `/memokit:init` çalıştırın; proje adı, etiket, dil ve korunan klasörleri sorar, `.claude/memokit.json` dosyasını yazar. Türkçe yanıt ve hook mesajları için `memokit.json` içinde `"language": "tr"` ayarlayın. Acil durumda korumaları kapatmak için `MEMOKIT_GUARD_OFF=1` değerini `.claude/settings.local.json` içindeki `env` bölümüne yazın ya da `claude`'u başlatmadan önce dışa aktarın. Kişisel bir altyapıdır, olduğu gibi paylaşılır; destek garantisi yoktur.
+Ardından git deposunda `/memokit:init` çalıştırın; proje adı, etiket, dil, korunan klasörleri ve kod grafiğini (graphify) sorar, `.claude/memokit.json` dosyasını yazar. `graph` ayarlıysa her handoff kod grafiğini tazeler (yalnız kod, LLM yok); handoff'un son adımı telefonuna bildirim gönderir (Remote Control bağlıyken). Türkçe yanıt ve hook mesajları için `memokit.json` içinde `"language": "tr"` ayarlayın. Acil durumda korumaları kapatmak için `MEMOKIT_GUARD_OFF=1` değerini `.claude/settings.local.json` içindeki `env` bölümüne yazın ya da `claude`'u başlatmadan önce dışa aktarın. Kişisel bir altyapıdır, olduğu gibi paylaşılır; destek garantisi yoktur.
 
 ## License
 

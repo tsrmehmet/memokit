@@ -57,7 +57,15 @@ if [ -n "$prompt" ]; then
     && HINTS="${HINTS}$(mk_msg IR_HINT_DEBUGGING)"
   if hint_on graphify && matches 'nerede|hangi modül|hangi modul|hangi servis|neye bağlı|neye bagli|kim çağır|kim cagir|bağımlılık|bagimlilik|nasıl akıyor|nasil akiyor|call graph|where is|who calls'; then
     gate=""
-    if [ -x "$MK_ROOT/scripts/graph-staleness.sh" ]; then
+    # shellcheck source-path=SCRIPTDIR source=lib/graph.sh
+    . "$MK_LIB_DIR/graph.sh"
+    if [ -n "$MK_GRAPH_ROOT" ]; then
+      # Configured graph: memokit measures staleness itself. The line is built
+      # from fixed message templates plus a commit count and config values
+      # that config.jq restricted to a path charset.
+      mk_graph_status
+      gate="$MK_GRAPH_LINE"
+    elif [ -x "$MK_ROOT/scripts/graph-staleness.sh" ]; then
       # External process output: first line only, strip quotes/backslashes and C0 controls
       # (see rationale in hooks/lib/README.md).
       # shellcheck disable=SC1003  # false positive: '\000-\037' is a literal
@@ -65,7 +73,7 @@ if [ -n "$prompt" ]; then
       # single quote.
       gate="$("$MK_ROOT/scripts/graph-staleness.sh" 2>/dev/null | head -1 | tr -d '"\\' | LC_ALL=C tr -d '\000-\037')"
     fi
-    if [ -n "$gate" ]; then HINTS="${HINTS}$(mk_msg IR_HINT_GRAPHIFY_FRESH "$gate")"; else HINTS="${HINTS}$(mk_msg IR_HINT_GRAPHIFY)"; fi
+    if [ -n "$gate" ]; then HINTS="${HINTS}$(mk_msg IR_HINT_GRAPHIFY_FRESH "$gate")"; else HINTS="${HINTS}$(mk_msg IR_HINT_GRAPHIFY "$MK_GRAPH_HELPER")"; fi
   fi
   hint_on decision && matches 'mimari|trade-off|hangisini seç|hangisini sec|a mı b mi|a mi b mi|seçenek|secenek|geri dönüşü zor|geri donusu zor|konsey|council|teknoloji|altyapı|altyapi|yığın|yigin|stack|architecture' \
     && HINTS="${HINTS}$(mk_msg IR_HINT_DECISION)"

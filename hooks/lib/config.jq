@@ -1,6 +1,6 @@
 # Validates .claude/memokit.json and emits shell assignments (quoted with @sh).
 def err($m): "MK_CONFIG_ERR=\($m | @sh)";
-def known: ["$schema","version","project","language","guardedDirs","contextBudget","stateStale","sessionStart","hints"];
+def known: ["$schema","version","project","language","guardedDirs","contextBudget","stateStale","sessionStart","hints","graph"];
 def builtin_all: ["debugging","decision","review","handoff","resume","graphify"];
 def dir_ok: type == "string"
   and test("^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$")
@@ -16,6 +16,10 @@ elif ((.contextBudget.limitTokens // 300000) | (type != "number") or (. < 1000))
 elif ((.stateStale.maxCommitsBehind // 3) | (type != "number") or (. < 0)) then err("stateStale")
 elif ((.hints.builtin // builtin_all) | (type != "array") or any(.[]; IN(builtin_all[]) | not)) then err("hints")
 elif ((.hints.custom // []) | (type != "array") or any(.[]; (.match | type) != "string" or (.text | type) != "string")) then err("hints")
+elif has("graph") and ((.graph | type) != "object"
+    or ((.graph.root // null) | ((. == ".") or dir_ok) | not)
+    or ((.graph.maxCommitsBehind // 20) | (type != "number") or (. < 0))
+    or ((.graph | has("refreshScript")) and (.graph.refreshScript | dir_ok | not))) then err("graph")
 else
   [ "MK_CONFIG_ERR=''",
     "MK_NAME=\(.project.name | @sh)",
@@ -28,6 +32,9 @@ else
     "MK_SESSION_DOCS=\((.sessionStart.docs // []) | map(tostring) | join("\n") | @sh)",
     "MK_HINTS_BUILTIN=\((.hints.builtin // builtin_all) | join(" ") | @sh)",
     "MK_HINTS_CUSTOM_JSON=\((.hints.custom // []) | tojson | @sh)",
+    "MK_GRAPH_ROOT=\((.graph.root // "") | @sh)",
+    "MK_GRAPH_MAX_BEHIND=\((.graph.maxCommitsBehind // 20) | floor | tostring | @sh)",
+    "MK_GRAPH_REFRESH_SCRIPT=\((.graph.refreshScript // "") | @sh)",
     "MK_CONFIG_WARN=\([keys[] | select(. as $k | known | index($k) | not)] | join(",") | @sh)"
   ] | join("\n")
 end

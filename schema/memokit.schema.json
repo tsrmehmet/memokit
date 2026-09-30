@@ -37,6 +37,16 @@
         "builtin": { "type": "array", "items": { "enum": ["debugging", "decision", "review", "handoff", "resume", "graphify"] } },
         "custom": { "type": "array", "items": { "type": "object", "required": ["match", "text"], "properties": { "match": { "type": "string" }, "text": { "type": "string" } } } }
       }
+    },
+    "graph": {
+      "type": "object",
+      "required": ["root"],
+      "description": "Code graph (graphify). Present = enabled: the handoff refreshes it and the codebase-question hint reports its staleness.",
+      "properties": {
+        "root": { "type": "string", "pattern": "^(\\.|[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*)$", "description": "Repo-relative directory the graph covers (\".\" = whole repo). Must match the directory the graph was built from." },
+        "maxCommitsBehind": { "type": "integer", "minimum": 0, "default": 20, "description": "Commits under root since the last refresh before the hint says to refresh before answering." },
+        "refreshScript": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$", "description": "Repo-relative script that replaces the builtin refresh (run from the repo root; exit 0 = refreshed)." }
+      }
     }
   }
 }

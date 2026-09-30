@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: shellcheck
-        run: shellcheck -x hooks/*.sh hooks/lib/*.sh skills/init/scripts/*.sh
+        run: shellcheck -x hooks/*.sh hooks/lib/*.sh skills/init/scripts/*.sh skills/handoff/scripts/*.sh
       - name: json manifests
         run: for f in .claude-plugin/*.json hooks/hooks.json schema/*.json examples/*.json; do jq empty "$f"; done
       - name: schema validates example

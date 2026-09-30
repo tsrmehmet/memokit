@@ -135,3 +135,29 @@ lib() { "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; $1"; }
   run lib 'mk_resolve_root "{}"; printf %s "$MK_ROOT"'
   [ "$output" = "$outer/link" ]
 }
+
+@test "graph is off by default" {
+  mk_project '{"version":1,"project":{"name":"Demo","tag":"DMO"}}'
+  run lib 'mk_resolve_root "{}"; mk_load_config; printf "[%s|%s|%s]" "$MK_GRAPH_ROOT" "$MK_GRAPH_MAX_BEHIND" "$MK_GRAPH_REFRESH_SCRIPT"'
+  [ "$output" = "[|20|]" ]
+}
+
+@test "graph settings are loaded" {
+  mk_project '{"version":1,"project":{"name":"D","tag":"DMO"},"graph":{"root":"src/app","maxCommitsBehind":5,"refreshScript":"scripts/g.sh"}}'
+  run lib 'mk_resolve_root "{}"; mk_load_config; printf "%s|%s|%s" "$MK_GRAPH_ROOT" "$MK_GRAPH_MAX_BEHIND" "$MK_GRAPH_REFRESH_SCRIPT"'
+  [ "$output" = "src/app|5|scripts/g.sh" ]
+}
+
+@test "graph root may be the repository root" {
+  mk_project '{"version":1,"project":{"name":"D","tag":"DMO"},"graph":{"root":"."}}'
+  run lib 'mk_resolve_root "{}"; mk_load_config && printf "%s" "$MK_GRAPH_ROOT"'
+  [ "$output" = "." ]
+}
+
+@test "rejects bad graph settings" {
+  for g in '"src"' '{}' '{"root":".."}' '{"root":"/etc"}' '{"root":"src","maxCommitsBehind":-1}' '{"root":"src","refreshScript":"../x.sh"}' '{"root":"src","refreshScript":""}'; do
+    mk_project "{\"version\":1,\"project\":{\"name\":\"D\",\"tag\":\"DMO\"},\"graph\":$g}"
+    run lib 'mk_resolve_root "{}"; mk_load_config; echo "$MK_CONFIG_ERR"'
+    [ "$output" = "graph" ] || { echo "accepted: $g -> $output"; false; }
+  done
+}

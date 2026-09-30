@@ -77,6 +77,7 @@ mk_load_config() {
   MK_NAME=""; MK_GUARDED_DIRS="src
 tests"; MK_CONTEXT_LIMIT=300000; MK_STATE_MAX_BEHIND=3
   MK_HEALTH_SCRIPT=""; MK_SESSION_DOCS=""; MK_HINTS_CUSTOM_JSON="[]"
+  MK_GRAPH_ROOT=""; MK_GRAPH_MAX_BEHIND=20; MK_GRAPH_REFRESH_SCRIPT=""
   MK_HINTS_BUILTIN="debugging decision review handoff resume graphify"
   if ! command -v jq >/dev/null 2>&1; then
     MK_CONFIG_ERR="jq"; MK_LANG="$(mk_lang_guess)"; mk_load_messages "$MK_LANG"; return 1

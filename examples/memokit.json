@@ -13,5 +13,6 @@
   "hints": {
     "builtin": ["debugging", "decision", "review", "handoff", "resume", "graphify"],
     "custom": [ { "match": "mockup|react|tailwind", "text": "Frontend work → frontend-design skill." } ]
-  }
+  },
+  "graph": { "root": "src", "maxCommitsBehind": 20 }
 }

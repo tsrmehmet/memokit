@@ -80,3 +80,31 @@ load helpers
   run_hook inject-rules.sh "$(prompt_payload 'merhaba')"
   ctx | grep -q '^\[DMO-KURAL\]'
 }
+GRAPH_EN='{"version":1,"project":{"name":"D","tag":"DMO"},"language":"en","graph":{"root":"src"}}'
+@test "graph configured but not built: hint names the builtin refresh" {
+  mk_project "$GRAPH_EN"
+  run_hook inject-rules.sh "$(prompt_payload 'where is the parser')"
+  ctx | grep -qF 'skills/handoff/scripts/memokit-graph.sh refresh'
+}
+@test "graph configured and fresh: hint says query directly" {
+  mk_project "$GRAPH_EN"
+  mkdir -p "$PROJ/graphify-out"; echo '{"nodes":[{"id":"a"}]}' > "$PROJ/graphify-out/graph.json"
+  git -C "$PROJ" rev-parse HEAD > "$PROJ/graphify-out/.graph_commit"
+  run_hook inject-rules.sh "$(prompt_payload 'where is the parser')"
+  ctx | grep -q 'fresh'
+  printf '%s' "$output" | jq -e . >/dev/null
+}
+@test "graph config wins over a legacy staleness script" {
+  mk_project "$GRAPH_EN"; mkdir -p "$PROJ/scripts"
+  printf '#!/bin/sh\necho LEGACY-GATE\n' > "$PROJ/scripts/graph-staleness.sh"; chmod +x "$PROJ/scripts/graph-staleness.sh"
+  run_hook inject-rules.sh "$(prompt_payload 'where is the parser')"
+  lacks "$(ctx)" 'LEGACY-GATE'
+}
+@test "no graph config and no gate: the hint says to ask the user before building a graph" {
+  mk_project '{"version":1,"project":{"name":"D","tag":"DMO"},"language":"en"}'
+  run_hook inject-rules.sh "$(prompt_payload 'who calls this')"
+  ctx | grep -q 'ask the user'
+  mk_project
+  run_hook inject-rules.sh "$(prompt_payload 'bu servis nerede')"
+  ctx | grep -q 'kullanıcıya'
+}

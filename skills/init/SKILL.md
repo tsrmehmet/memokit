@@ -19,13 +19,18 @@ Run `$INIT detect "$ROOT"`.
 - Language: `tr` or `en` (default: the language the user is speaking).
 - Guarded dirs (default `src`, `tests`; propose extra dirs from the detected stack, e.g. `web` for a separate frontend).
 - Docs to show at session start (default none).
+- Code graph (graphify) — always ask, with a measured recommendation. Measure first: `command -v graphify` and `git ls-files <main source dir> | wc -l`. Recommend **yes** when graphify is installed and the source dir has roughly 50+ files (say: code only, AST extraction, no LLM tokens, seconds to a minute; refreshed on every handoff that changed code); recommend **later** for an empty or tiny project (it can be added to `.claude/memokit.json` any time). If graphify is not installed, say so and recommend installing it before enabling this. Proposed setting: `"graph": {"root": "<main source dir>"}` (`maxCommitsBehind` defaults to 20).
 If the stack is empty/unknown, say you will use defaults and that `/memokit:init` can be re-run after the tech decision (edit `.claude/memokit.json` directly then).
 
 ## 2. Write
 1. Build the config JSON in a temp file; `$INIT write-config "$ROOT" <file>`.
 2. `$INIT scaffold "$ROOT" <lang>` — it never overwrites; show the created/kept list.
 3. `$INIT settings "$ROOT"`.
-4. Show `git status --short` and `git diff` to the user. **Do not commit** unless the user says so.
+4. Code graph — only if the user said yes:
+   - `git check-ignore -q graphify-out/graph.json || echo not-ignored`; if not ignored, append `graphify-out/` to `.gitignore`.
+   - Look for ignored files that exist under the root: `git ls-files -o -i --exclude-standard <root> | head -50`. graphify does not read nested `.gitignore` files, so build output or secrets found there (e.g. `.env`, auth/session files, bundles) go into a `.graphifyignore` at the repo root before the first build. Show the user what you excluded.
+   - Build: `"${CLAUDE_PLUGIN_ROOT}/skills/handoff/scripts/memokit-graph.sh" refresh; echo "graph-exit=$?"` and show the output (node count, marker).
+5. Show `git status --short` and `git diff` to the user. **Do not commit** unless the user says so.
 
 ## 3. Verify (WORKING-MODEL §3)
 Tell the user to start a new session (hooks load at session start), then in that session check and show:

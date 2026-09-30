@@ -2,6 +2,12 @@
 
 Every change to `hooks/`, `skills/`, `agents/` or `WORKING-MODEL.md` bumps `version` in `.claude-plugin/plugin.json` and adds an entry here (a pinned version means `/plugin update` delivers nothing otherwise).
 
+## 0.3.0 — 2026-10-01
+- Code graph: optional `graph` setting (`root`, `maxCommitsBehind`, `refreshScript`). `/memokit:handoff` refreshes the graphify graph after its commit (code only, no LLM; a failure is a warning, not a failed handoff); the codebase-question hint reports measured staleness; `skills/handoff/scripts/memokit-graph.sh status|refresh`.
+- Without `graph`, the graphify hint asks the user before building a graph instead of building one.
+- `/memokit:init` offers the code graph with a measured recommendation and builds it.
+- `/memokit:handoff` ends with a `PushNotification` (reaches the phone when Remote Control is connected); the context-budget message requires that step.
+
 ## 0.2.0 — 2026-09-29
 - Migrations complete; equivalence harness removed.
 

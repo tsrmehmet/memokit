@@ -62,3 +62,28 @@ handoff_add_line() { grep -E '^[[:space:]]*git add docs/' "$MK_REPO/skills/hando
   grep -qiF 'restart the session immediately' "$f"
   grep -qF 'legacy and memokit hooks both run' "$f"
 }
+line_of() { grep -nF -- "$2" "$1" | head -n1 | cut -d: -f1; }
+@test "handoff refreshes the code graph after the commit and a graph failure does not fail the handoff" {
+  f="$MK_REPO/skills/handoff/SKILL.md"
+  c="$(line_of "$f" 'git commit -m')"; g="$(line_of "$f" 'memokit-graph.sh" refresh')"
+  [ -n "$c" ] && [ -n "$g" ] && [ "$c" -lt "$g" ]
+  grep -qF 'does not fail the handoff' "$f"
+  grep -qF 'CLAUDE_PLUGIN_ROOT}/skills/handoff/scripts/memokit-graph.sh' "$f"
+}
+@test "handoff ends with a push notification, after the verification" {
+  f="$MK_REPO/skills/handoff/SKILL.md"
+  v="$(line_of "$f" "Handoff güncel, sonraki oturumda 'devam et' demen yeterli.")"; p="$(line_of "$f" 'select:PushNotification')"
+  [ -n "$v" ] && [ -n "$p" ] && [ "$v" -lt "$p" ]
+  grep -qF 'status: "proactive"' "$f"
+  grep -qF 'Handoff TAMAMLANAMADI' "$f"
+  grep -qF 'Handoff NOT complete' "$f"
+}
+@test "the context-budget message asks for the notification step in both languages" {
+  for l in tr en; do grep '^MK_T_CB_AUTONOMOUS=' "$HOOKS/messages/$l.sh" | grep -qF 'PushNotification' || { echo "$l"; false; }; done
+}
+@test "init offers the code graph with a measured recommendation and builds it with the helper" {
+  f="$MK_REPO/skills/init/SKILL.md"
+  grep -qF 'graphify' "$f"
+  grep -qF 'memokit-graph.sh" refresh' "$f"
+  grep -qF '.graphifyignore' "$f"
+}
