@@ -3,6 +3,7 @@ load helpers
 @test "skill names" {
   grep -q '^name: handoff$' "$MK_REPO/skills/handoff/SKILL.md"
   grep -q '^name: resume$'  "$MK_REPO/skills/resume/SKILL.md"
+  grep -q '^name: triage$' "$MK_REPO/skills/triage/SKILL.md"
 }
 @test "handoff verifies by measuring and uses the exact closing phrase" {
   f="$MK_REPO/skills/handoff/SKILL.md"
@@ -20,7 +21,7 @@ load helpers
 GATE_DESC='Only in projects that have .claude/memokit.json — '
 GATE_STEP='If `.claude/memokit.json` does not exist in the project root, stop'
 @test "handoff and resume are gated on .claude/memokit.json: description prefix and step 0 first" {
-  for s in handoff resume; do
+  for s in handoff resume triage; do
     f="$MK_REPO/skills/$s/SKILL.md"
     sed -n '/^---$/,/^---$/p' "$f" | grep -qF "description: $GATE_DESC" || { echo "$s: description not gated"; false; }
     g="$(grep -nF "$GATE_STEP" "$f" | head -n1 | cut -d: -f1)"
@@ -32,6 +33,14 @@ GATE_STEP='If `.claude/memokit.json` does not exist in the project root, stop'
 @test "init is not gated (it is how a project gets configured)" {
   f="$MK_REPO/skills/init/SKILL.md"
   run grep -F "$GATE_DESC" "$f"; [ "$status" -ne 0 ]
+}
+@test "triage: evidence-based classes, 3-strike stop, red before green, overlay" {
+  f="$MK_REPO/skills/triage/SKILL.md"
+  for s in 'REGRESSION' 'FLAKY' 'ENV/DATA' 'UNKNOWN' 'No classification without evidence' \
+           'superpowers:systematic-debugging' '.claude/memokit/triage.md' 'docs/triage/' \
+           'three hypotheses' 'red for the right reason' 'WORKING-MODEL.md §2' 'memokit:coder'; do
+    grep -qF "$s" "$f" || { echo "missing: $s"; false; }
+  done
 }
 handoff_add_line() { grep -E '^[[:space:]]*git add docs/' "$MK_REPO/skills/handoff/SKILL.md" | head -n1 | sed 's/^[[:space:]]*//'; }
 @test "handoff step 7 stages docs/ when .council/ is absent" {

@@ -26,3 +26,8 @@ GATE_STEP='If `.claude/memokit.json` does not exist in the project root, stop'
     [ "$g" -lt "$s" ] || { echo "$a: gate after first step"; false; }
   done
 }
+@test "bugfix slices are red before green" {
+  grep -qF 'Red before green' "$MK_REPO/agents/reviewer.md"
+  grep -qF 'red output' "$MK_REPO/agents/coder.md"
+  grep -qF 'WORKING-MODEL.md §2' "$MK_REPO/agents/coder.md"
+}

@@ -41,7 +41,7 @@ keys() { grep -o '^MK_T_[A-Z0-9_]*' "$HOOKS/messages/$1.sh" | sort; }
 
 @test "invalid-config hint gives a reachable recovery path (both guards, both languages)" {
   for lang in tr en; do
-    for hook in guard-edit.sh guard-subagent-authority.sh; do
+    for hook in guard-edit.sh guard-subagent-authority.sh guard-destructive.sh; do
       mk_project "{\"version\":1,\"project\":{\"name\":\"D\",\"tag\":\"DMO\"},\"language\":\"$lang\",\"guardedDirs\":[\"..\"]}"
       run_hook "$hook" "$(bash_payload 'ls' agent-1)"
       [ "$(decision)" = "deny" ] || { echo "$hook/$lang: not denied"; false; }

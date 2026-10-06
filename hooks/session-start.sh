@@ -167,6 +167,12 @@ WARN_TXT=""
 if [ -n "$MK_CONFIG_WARN" ]; then
   WARN_TXT="${nl}${nl}$(mk_msg SS_UNKNOWN_KEYS "$MK_CONFIG_WARN")"
 fi
+# shellcheck source-path=SCRIPTDIR source=lib/careful.sh
+. "$MK_LIB_DIR/careful.sh"
+BAD_CF="$(mk_careful_bad_patterns | paste -sd, - | sed 's/,/, /g')"
+if [ -n "$BAD_CF" ]; then
+  WARN_TXT="${WARN_TXT}${nl}${nl}$(mk_msg SS_CAREFUL_BAD_REGEX "$BAD_CF")"
+fi
 
 NOTES=""
 if [ -f "$MK_ROOT/docs/HISTORY.md" ]; then

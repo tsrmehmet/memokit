@@ -10,9 +10,11 @@
 # on the turns it does not fire, and a hook cannot be forgotten the way a
 # documented rule can.
 #
-# SAFETY: the prompt is READ but never echoed back. Only fixed strings from
-# this file (plus the sanitized graph-staleness gate text, see below) reach
-# additionalContext, so nothing in a prompt can break the JSON or smuggle
+# SAFETY: the prompt is READ but never echoed back, with ONE exception: the
+# 6-hex approval code of a valid "onay|approve <code>" first line is echoed
+# (it matched [0-9a-f]{6} exactly). Only fixed strings from this file (plus
+# the sanitized graph-staleness gate text, see below) reach
+# additionalContext, so nothing else in a prompt can break the JSON or smuggle
 # instructions through it.
 set -u
 # shellcheck source-path=SCRIPTDIR source=lib/common.sh
@@ -36,6 +38,18 @@ fi
 
 prompt="$(printf '%s' "$PAYLOAD" | jq -r '.prompt // empty' 2>/dev/null)" || prompt=""
 DIRS="$(mk_dirs_human)"
+
+# Destructive-command approval (guard-destructive.sh). Only a FIRST LINE that
+# starts with "onay <code>" / "approve <code>" counts, so a code quoted
+# inside a report or a notification never grants anything. The code is
+# [0-9a-f]{6}, so echoing it back cannot break the JSON.
+GRANTED=""
+code="$(printf '%s' "$prompt" | sed -nE '1s/^[[:space:]]*([Oo][Nn][Aa][Yy]|[Aa][Pp][Pp][Rr][Oo][Vv][Ee])[[:space:]]+([0-9a-fA-F]{6})([^0-9a-zA-Z].*)?$/\2/p' | tr 'A-F' 'a-f')"
+if [ -n "$code" ]; then
+  # shellcheck source-path=SCRIPTDIR source=lib/careful.sh
+  . "$MK_LIB_DIR/careful.sh"
+  mk_careful_grant "$code" 2>/dev/null && GRANTED="$(mk_msg IR_CAREFUL_GRANTED "$code")"
+fi
 TEXT="$(mk_msg IR_RULES_BASE "$DIRS")"
 
 RULES_FILE="$MK_ROOT/.claude/memokit/rules.md"
@@ -53,7 +67,7 @@ hint_on() { case " $MK_HINTS_BUILTIN " in *" $1 "*) return 0 ;; esac; return 1; 
 matches() { printf '%s' "$prompt" | grep -qiE "$1" 2>/dev/null; }
 HINTS=""
 if [ -n "$prompt" ]; then
-  hint_on debugging && matches 'bug|hata|çalışmıyor|calismiyor|patlıyor|patliyor|kırmızı|kirmizi|broken|crash|exception|regres|neden böyle|neden boyle|fails?|failing' \
+  hint_on debugging && matches 'bug|hata|çalışmıyor|calismiyor|patlıyor|patliyor|kırmızı|kirmizi|broken|crash|exception|regres|neden böyle|neden boyle|fails?|failing|flaky|triyaj|triage|red tests?|e2e' \
     && HINTS="${HINTS}$(mk_msg IR_HINT_DEBUGGING)"
   if hint_on graphify && matches 'nerede|hangi modül|hangi modul|hangi servis|neye bağlı|neye bagli|kim çağır|kim cagir|bağımlılık|bagimlilik|nasıl akıyor|nasil akiyor|call graph|where is|who calls'; then
     gate=""
@@ -99,5 +113,5 @@ if [ -n "$prompt" ]; then
   done
 fi
 
-jq -n --arg t "${TEXT}${HINTS}" '{hookSpecificOutput:{hookEventName:"UserPromptSubmit",additionalContext:$t}}'
+jq -n --arg t "${TEXT}${HINTS}${GRANTED}" '{hookSpecificOutput:{hookEventName:"UserPromptSubmit",additionalContext:$t}}'
 exit 0

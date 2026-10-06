@@ -14,5 +14,8 @@
     "builtin": ["debugging", "decision", "review", "handoff", "resume", "graphify"],
     "custom": [ { "match": "mockup|react|tailwind", "text": "Frontend work → frontend-design skill." } ]
   },
-  "graph": { "root": "src", "maxCommitsBehind": 20 }
+  "graph": { "root": "src", "maxCommitsBehind": 20 },
+  "careful": {
+    "patterns": [ { "match": "kubectl[[:space:]]+(apply|patch|scale)", "label": "kubectl-mutate" } ]
+  }
 }

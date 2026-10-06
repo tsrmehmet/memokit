@@ -11,3 +11,13 @@ load helpers
     grep -q "^## §$n" "$MK_REPO/WORKING-MODEL.md"
   done
 }
+@test "§2 defines the decision format" {
+  sec="$(sed -n '/^## §2/,/^## §3/p' "$MK_REPO/WORKING-MODEL.md")"
+  for s in '**Recommendation**' '**Stakes**' '**Reversibility**' 'one-way door' '**Options**' 'Completeness X/10'; do
+    printf '%s' "$sec" | grep -qF "$s" || { echo "missing: $s"; false; }
+  done
+  grep -qF 'triage.md' "$MK_REPO/WORKING-MODEL.md"
+}
+@test "rule block points at the §2 format in both languages" {
+  for l in en tr; do grep '^MK_T_IR_RULES_BASE=' "$HOOKS/messages/$l.sh" | grep -qF 'WORKING-MODEL.md §2' || { echo "$l"; false; }; done
+}

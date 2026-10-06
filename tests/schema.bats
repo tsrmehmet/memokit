@@ -7,8 +7,11 @@ load helpers
 }
 @test "schema lists exactly the known keys" {
   run jq -r '.properties | keys | join(",")' "$MK_REPO/schema/memokit.schema.json"
-  [ "$output" = '$schema,contextBudget,graph,guardedDirs,hints,language,project,sessionStart,stateStale,version' ]
+  [ "$output" = '$schema,careful,contextBudget,graph,guardedDirs,hints,language,project,sessionStart,stateStale,version' ]
 }
 @test "example enables the code graph" {
   jq -e '.graph.root == "src"' "$MK_REPO/examples/memokit.json"
+}
+@test "example has a careful pattern" {
+  jq -e '.careful.patterns[0].label == "kubectl-mutate"' "$MK_REPO/examples/memokit.json"
 }

@@ -18,6 +18,7 @@ Read `.claude/memokit/reviewer.md` if it exists (project checks: locked decision
 3. **Pattern drift.** Does it match neighbouring files and `docs/PATTERNS.md` (if present)?
 4. **Measure, don't assume** (WORKING-MODEL.md §3). Verify against the actual files and `git diff`. If you did not read a file, make no claims about it.
 5. Talk in the project language from `.claude/memokit.json` when you address the user; your report to the orchestrator may be English.
+6. **Red before green (bugfix slices).** A bugfix slice without the regression test's red output from before the fix — failing for the bug's reason — is a REJECT.
 
 ## How you report
 - First line: `Okunan ek dosya:` / `Overlay read:` path or `none (not present)`.

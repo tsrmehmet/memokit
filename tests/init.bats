@@ -69,3 +69,13 @@ INIT() { "$MK_BASH" "$MK_REPO/skills/init/scripts/memokit-init.sh" "$@"; }
   [ -L "$PROJ/CLAUDE.md" ]
   [ ! -e "$PROJ/CLAUDE.md" ]
 }
+
+@test "write-config adds an empty careful.patterns when absent, keeps a given one" {
+  mk_project none; f="$(mktemp)"; printf '%s' "$DEFAULT_CONFIG" > "$f"
+  run INIT write-config "$PROJ" "$f"; [ "$status" -eq 0 ]
+  jq -e '.careful.patterns == []' "$PROJ/.claude/memokit.json"
+  rm "$PROJ/.claude/memokit.json"
+  printf '{"version":1,"project":{"name":"D","tag":"DMO"},"careful":{"patterns":[{"match":"x","label":"y"}]}}' > "$f"
+  run INIT write-config "$PROJ" "$f"; [ "$status" -eq 0 ]
+  jq -e '.careful.patterns[0].label == "y"' "$PROJ/.claude/memokit.json"
+}

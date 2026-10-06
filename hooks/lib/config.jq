@@ -1,6 +1,6 @@
 # Validates .claude/memokit.json and emits shell assignments (quoted with @sh).
 def err($m): "MK_CONFIG_ERR=\($m | @sh)";
-def known: ["$schema","version","project","language","guardedDirs","contextBudget","stateStale","sessionStart","hints","graph"];
+def known: ["$schema","version","project","language","guardedDirs","contextBudget","stateStale","sessionStart","hints","graph","careful"];
 def builtin_all: ["debugging","decision","review","handoff","resume","graphify"];
 def dir_ok: type == "string"
   and test("^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$")
@@ -20,6 +20,11 @@ elif has("graph") and ((.graph | type) != "object"
     or ((.graph.root // null) | ((. == ".") or dir_ok) | not)
     or ((.graph.maxCommitsBehind // 20) | (type != "number") or (. < 0))
     or ((.graph | has("refreshScript")) and (.graph.refreshScript | dir_ok | not))) then err("graph")
+elif has("careful") and ((.careful | type) != "object"
+    or ((.careful.patterns // []) | (type != "array") or any(.[];
+         (type != "object")
+         or ((.match | type) != "string") or ((.match | length) == 0)
+         or ((.label | type) != "string") or ((.label | test("^[a-z0-9][a-z0-9-]{0,31}$")) | not)))) then err("careful")
 else
   [ "MK_CONFIG_ERR=''",
     "MK_NAME=\(.project.name | @sh)",
@@ -35,6 +40,7 @@ else
     "MK_GRAPH_ROOT=\((.graph.root // "") | @sh)",
     "MK_GRAPH_MAX_BEHIND=\((.graph.maxCommitsBehind // 20) | floor | tostring | @sh)",
     "MK_GRAPH_REFRESH_SCRIPT=\((.graph.refreshScript // "") | @sh)",
+    "MK_CAREFUL_PATTERNS_JSON=\((.careful.patterns // []) | tojson | @sh)",
     "MK_CONFIG_WARN=\([keys[] | select(. as $k | known | index($k) | not)] | join(",") | @sh)"
   ] | join("\n")
 end

@@ -108,3 +108,10 @@ GRAPH_EN='{"version":1,"project":{"name":"D","tag":"DMO"},"language":"en","graph
   run_hook inject-rules.sh "$(prompt_payload 'bu servis nerede')"
   ctx | grep -q 'kullanıcıya'
 }
+@test "triage hint fires for red/flaky test piles" {
+  mk_project
+  for p in 'E2E 84 kırmızı, bakalım' 'flaky testleri triyaj et' 'CI is full of red tests, triage them'; do
+    run_hook inject-rules.sh "$(prompt_payload "$p")"
+    ctx | grep -q '/memokit:triage' || { echo "no hint: $p"; false; }
+  done
+}

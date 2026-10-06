@@ -133,7 +133,7 @@ cmd_write_config() {
 
   mkdir -p "$root/.claude"
   tmp="$(mktemp "${TMPDIR:-/tmp}/memokit-init.XXXXXX")"
-  if ! jq --indent 2 --arg schema "$SCHEMA_URL" '{"$schema": $schema} + .' "$json_file" > "$tmp" 2>/dev/null; then
+  if ! jq --indent 2 --arg schema "$SCHEMA_URL" '{"$schema": $schema} + . + (if has("careful") then {} else {careful: {patterns: []}} end)' "$json_file" > "$tmp" 2>/dev/null; then
     rm -f "$tmp"
     printf 'error: failed to render config\n' >&2
     exit 1

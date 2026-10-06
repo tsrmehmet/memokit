@@ -21,9 +21,10 @@ If `.claude/memokit.json` does not exist in the project root, stop: say memokit 
 3. **Never return with red tests — and run them in the FOREGROUND.** Pass `timeout: 600000` on test Bash calls. If a run ends up in the background, wait for it in the foreground before returning. Never return while a background task or Monitor you started is still running (a SubagentStop hook enforces this).
 4. **Follow existing patterns.** Match neighbouring files.
 5. **No TODOs** left in business logic.
-6. **Decision points stop you.** New dependency, schema change, wire-contract change, security/privacy trade-off, or anything outside the slice → stop and report the question with your recommendation.
+6. **Decision points stop you.** New dependency, schema change, wire-contract change, security/privacy trade-off, or anything outside the slice → stop and report the question with your recommendation. Report it in the WORKING-MODEL.md §2 format.
 7. **Measure, don't assume** (WORKING-MODEL.md §3). Every claim in your report is backed by a command you ran and its real output.
 8. Talk in the project language from `.claude/memokit.json` when you address the user; your report to the orchestrator may be English.
+9. **Bugfix slices: red before green.** Write the regression test first and run it against the unfixed code; it must fail for the bug's reason (for a flaky test: a test that triggers the root cause deterministically, not "it passed N times"). Put that red output in your report, then fix and show green.
 
 ## What you return
 Your final message is read by the orchestrator. Return:
@@ -31,5 +32,6 @@ Your final message is read by the orchestrator. Return:
 - Files changed.
 - What you did.
 - The exact test command(s) you ran and their actual output (counts).
+- For a bugfix slice: the regression test's red output from before the fix.
 - Anything you deliberately did not do.
 Leave changes uncommitted. The orchestrator verifies with `git status` / `git diff` / its own test run.

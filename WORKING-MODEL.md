@@ -12,6 +12,13 @@ Injected at every session start. The project's CLAUDE.md adds project facts; it 
 ## §2 Decisions that belong to the user
 Ask the user — always with your recommendation and its rationale, never a neutral list — before: architectural choices, anything hard to reverse, a new dependency, a schema or wire-contract change, a security/privacy trade-off, a scope change, or any choice you are genuinely torn on (offer the llm-council for those). Routine operational choices (e.g. when to hand off, §4) are yours.
 
+**Format of every decision question** (AskUserQuestion or text):
+- **Recommendation** — one option, with "because …".
+- **Stakes** — what is lost if the choice is wrong (time, data, rework).
+- **Reversibility** — one-way door (hard to undo) or two-way door (easy). A one-way door is never taken by default or autonomously — not even during a context-budget handoff.
+- **Options** — one line each: upside / downside · effort.
+- **Completeness X/10** — only when the options differ in how much they cover.
+
 ## §3 Measure, don't assume
 Before you say something is done, passing, fixed, up to date, written or deleted, **measure it with a command and look at the output**.
 | Claim | Measurement |
@@ -29,7 +36,7 @@ A subagent report is a **claim**, not evidence. Reports to the user carry the cl
 - New session: `/memokit:resume` (or the user says "devam et"/"continue").
 
 ## §5 Project overlays
-Project files in `.claude/memokit/` (`rules.md`, `coder.md`, `reviewer.md`, `handoff.md`, `resume.md`) add and narrow rules. They cannot loosen §1–§4.
+Project files in `.claude/memokit/` (`rules.md`, `coder.md`, `reviewer.md`, `handoff.md`, `resume.md`, `triage.md`) add and narrow rules. They cannot loosen §1–§4.
 
 ## §6 Language
 Talk to the user in the project's `language` from `.claude/memokit.json`.

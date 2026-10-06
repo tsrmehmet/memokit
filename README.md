@@ -10,6 +10,7 @@ This is personal infrastructure shared as-is. MIT licensed, no support guarantee
 |---|---|---|
 | Hook | `guard-edit.sh` | PreToolUse: blocks the main session from writing under the guarded dirs (Edit/Write and Bash write constructs), in the main checkout and in every git worktree of the repo (including Claude Code worktrees). |
 | Hook | `guard-subagent-authority.sh` | PreToolUse: blocks subagents from committing, merging, rewriting history, touching the remote, or delegating. |
+| Hook | `guard-destructive.sh` | PreToolUse: denies destructive Bash commands (force push, reset --hard, recursive rm, destructive SQL, kubectl/helm delete, …, plus project patterns) until the user approves with a single-use code. It also denies Edit/Write/MultiEdit/NotebookEdit to memokit's approval (grant) file, including through symlinks. |
 | Hook | `inject-rules.sh` | UserPromptSubmit: re-injects the core rules (plus your `rules.md`) and keyword-gated skill hints. |
 | Hook | `session-start.sh` | SessionStart: injects `docs/STATE.md`, tracked docs, health-script summary and a settings risk scan. |
 | Hook | `check-state-stale.sh` | Stop: warns when guarded dirs changed but `docs/STATE.md` did not. |
@@ -21,6 +22,7 @@ This is personal infrastructure shared as-is. MIT licensed, no support guarantee
 | Skill | `/memokit:init` | Sets memokit up in a repo (new project or migration from per-repo hooks). |
 | Skill | `/memokit:handoff` | Writes the handoff and verifies it by measurement. |
 | Skill | `/memokit:resume` | Picks up from `docs/STATE.md` in a new session. |
+| Skill | `/memokit:triage` | Clusters red/flaky tests by signature, classifies them with evidence, then drives one root cause to a red-before-green fix. |
 | Doc | `WORKING-MODEL.md` | The shared rules the hooks, agents and skills refer to. |
 
 ## Install
@@ -75,6 +77,7 @@ Requirements: bash, jq, git; macOS or Linux.
 | `graph.root` | no | none | Enables the code graph (see below): repo-relative directory the graph covers (`.` = whole repo). |
 | `graph.maxCommitsBehind` | no | `20` | Commits under `graph.root` since the last refresh before the codebase-question hint says "refresh first". |
 | `graph.refreshScript` | no | none | Repo-relative script that replaces the builtin refresh (run from the repo root; exit 0 = refreshed). |
+| `careful.patterns[]` | no | `[]` | `{ "match": "<ERE>", "label": "<name>" }` destructive-command patterns added to the builtin set (case-insensitive, whole command). |
 
 ## Code graph (graphify)
 
@@ -101,6 +104,7 @@ Project-specific rules live in `.claude/memokit/`:
 | `reviewer.md` | `memokit:reviewer`, as its first step |
 | `handoff.md` | `/memokit:handoff`, after the generic steps |
 | `resume.md` | `/memokit:resume`, after the generic steps |
+| `triage.md` | `/memokit:triage`, as its first step |
 
 Precedence: overlays only add and narrow. They cannot loosen the plugin's invariants: subagents cannot touch git history, the orchestrator cannot write to guarded dirs, and nothing is called done without evidence. A loosening attempt is ineffective because the hooks block it anyway.
 
@@ -134,6 +138,7 @@ Hooks read these from their environment, so set them in `.claude/settings.local.
 | `MEMOKIT_GUARD_OFF=1` | Emergency override: disables the write guard and the subagent authority guard. |
 | `MEMOKIT_SUBAGENT_BG_OFF=1` | Disables the subagent background-work gate, so subagents can return while their background tasks still run. |
 | `MEMOKIT_CONTEXT_OFF=1` | Disables the context-budget reminder. |
+| `MEMOKIT_CAREFUL_OFF=1` | Disables the destructive-command guard. (`MEMOKIT_GUARD_OFF=1` disables it too.) |
 | `MEMOKIT_NO_INIT_HINT=1` | Silences the "run `/memokit:init`" hint. Without it the hint is added on every SessionStart (startup, resume, clear, compact) in a git work tree that has no `.claude/memokit.json` and no legacy `.claude/hooks/`. |
 | `MEMOKIT_HOOK_DEBUG=1` | Each hook dumps the payload it received to `$TMPDIR/memokit-<hash>-hook-<name>.json` (`/tmp` if `TMPDIR` is unset). |
 
@@ -163,6 +168,12 @@ To try a local checkout: `/plugin marketplace add /path/to/memokit`.
 
 Releases: `.claude-plugin/plugin.json` pins `version`, and `/plugin update` delivers nothing until that string changes. Every change to `hooks/`, `skills/`, `agents/` or `WORKING-MODEL.md` therefore bumps `version` in `.claude-plugin/plugin.json` and adds a `CHANGELOG.md` entry in the same change.
 
+## Destructive commands
+
+`guard-destructive.sh` denies a Bash command that matches a builtin pattern (`git push --force`/`-f`/`+ref`, `git reset --hard`, `git clean -f`, `git branch -D` (also `-d -f`, `--delete --force`, `-df`), `git checkout -- .`/`git restore .` (`git restore --staged` alone is not blocked, nor is `git rm`), recursive `rm` outside `node_modules bin obj dist build .next coverage TestResults`, `DROP`/`TRUNCATE`/`DELETE FROM` together with a SQL client, `dotnet ef database drop`, `kubectl delete`, `helm uninstall|delete`, `docker system|volume prune`, `docker volume rm`; docker global options are tolerated) or a project pattern from `careful.patterns`. The deny message carries a 6-character code. To approve, start your next message with `onay <code>` or `approve <code>`; the AI then re-runs the exact same command once. A code is bound to the project and the exact command text and expires after 10 minutes. Edit, Write, MultiEdit and NotebookEdit to memokit's approval (grant) file are denied too, including through symlinks, so the AI cannot grant itself an approval.
+
+It denies rather than asks because a hook's "ask" does not reliably prompt in auto mode or `claude -p`. It is accident prevention, not a sandbox: commands built from variables or hidden in scripts are not seen, and the AI runs as your user. The approval code is derived from the project and the command text, so it is not a secret: it stops accidents, not an agent that deliberately works around it. A command whose text merely quotes a destructive command (e.g. a commit message mentioning `git push --force`) is also blocked and needs an approval code. Project patterns can only add to the builtin set. If another memokit guard also blocks the same command (a write to a guarded directory from the main session, git history commands from a subagent), an approval code does not help: that guard's rule applies.
+
 ## Türkçe
 
 memokit, Claude Code için bir çalışma modeli plugin'idir: ana oturum (orkestratör) üretim kodu yazmaz, kodu bir Sonnet alt ajanı (`memokit:coder`) yazar, her dilimi bir Opus gözden geçirici (`memokit:reviewer`) onaylar. Oturum ritüelleri `docs/STATE.md` dosyasını güncel tutar; bağlam bütçesi aşılınca yapay zekâ kendi kararıyla ölçülü bir handoff yapar.
@@ -176,7 +187,7 @@ memokit'i **proje başına** kurup etkinleştirin (projenin kök dizininde):
 
 `/plugin install` penceresinde projeye özel bir kapsam seçin (kabukta: `claude plugin install memokit@memokit --scope local`). Manifest `"defaultEnabled": false` ayarladığı için kurulum tek başına yetmez, plugin kapalı kurulur ve `/memokit:init` çalışmaz. Projede etkinleştirin: `/plugin` menüsünden ya da kabukta `claude plugin enable memokit@memokit --scope local`. Etkinleştirilmemiş projelerde memokit kapalı kalır. `/memokit:init`, projenin `.claude/settings.json` dosyasına `enabledPlugins["memokit@memokit"] = true` yazar. Başka projeler hâlâ kendi depo-içi hook'larıyla çalışırken memokit'i kullanıcı düzeyinde (user level) etkinleştirmeyin: memokit'in ajan ve skill'leri o projelerin kendi coder/reviewer/handoff/resume'u ile yan yana görünür.
 
-Ardından git deposunda `/memokit:init` çalıştırın; proje adı, etiket, dil, korunan klasörleri ve kod grafiğini (graphify) sorar, `.claude/memokit.json` dosyasını yazar. `graph` ayarlıysa her handoff kod grafiğini tazeler (yalnız kod, LLM yok); handoff'un son adımı telefonuna bildirim gönderir (Remote Control bağlıyken). Türkçe yanıt ve hook mesajları için `memokit.json` içinde `"language": "tr"` ayarlayın. Acil durumda korumaları kapatmak için `MEMOKIT_GUARD_OFF=1` değerini `.claude/settings.local.json` içindeki `env` bölümüne yazın ya da `claude`'u başlatmadan önce dışa aktarın. Kişisel bir altyapıdır, olduğu gibi paylaşılır; destek garantisi yoktur.
+Ardından git deposunda `/memokit:init` çalıştırın; proje adı, etiket, dil, korunan klasörleri ve kod grafiğini (graphify) sorar, `.claude/memokit.json` dosyasını yazar. `graph` ayarlıysa her handoff kod grafiğini tazeler (yalnız kod, LLM yok); handoff'un son adımı telefonuna bildirim gönderir (Remote Control bağlıyken). Türkçe yanıt ve hook mesajları için `memokit.json` içinde `"language": "tr"` ayarlayın. Acil durumda korumaları kapatmak için `MEMOKIT_GUARD_OFF=1` değerini `.claude/settings.local.json` içindeki `env` bölümüne yazın ya da `claude`'u başlatmadan önce dışa aktarın. Kişisel bir altyapıdır, olduğu gibi paylaşılır; destek garantisi yoktur. Yıkıcı komutlar (force push, reset --hard, özyinelemeli rm, yıkıcı SQL, kubectl/helm delete ve projenin `careful.patterns` kalıpları) engellenir; onay için bir sonraki mesajınıza `onay <kod>` ile başlayın. Kırmızı ve flaky testler için `/memokit:triage`.
 
 ## License
 
