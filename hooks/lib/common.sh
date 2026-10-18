@@ -84,7 +84,9 @@ tests"; MK_CONTEXT_LIMIT=300000; MK_STATE_MAX_BEHIND=3
   if ! command -v jq >/dev/null 2>&1; then
     MK_CONFIG_ERR="jq"; MK_LANG="$(mk_lang_guess)"; mk_load_messages "$MK_LANG"; return 1
   fi
-  if ! out="$(jq -r -f "$MK_LIB_DIR/config.jq" "$MK_CONFIG" 2>/dev/null)" || [ -z "$out" ]; then
+  # config.jq always starts with MK_CONFIG_ERR=: anything else is a broken jq.
+  if ! out="$(jq -r -f "$MK_LIB_DIR/config.jq" "$MK_CONFIG" 2>/dev/null)" ||
+     case "$out" in MK_CONFIG_ERR=*) false ;; *) true ;; esac; then
     MK_CONFIG_ERR="parse"; MK_LANG="$(mk_lang_guess)"; mk_load_messages "$MK_LANG"; return 1
   fi
   eval "$out"

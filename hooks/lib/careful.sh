@@ -15,13 +15,57 @@
 # and for a whole stale sibling temp entry (lib/temp.sh, mk_temp_rm_safe),
 # but only when the whole command is one simple rm (mk_careful_single_rm)
 # and the caller ran mk_temp_init (guard-destructive.sh does).
+#
+# Every rule also runs on a flat view (mk_careful_flat) that undoes quoting,
+# escaping and grouping, so "rm", r''m, \rm, {rm,-rf,x} or (git reset --hard)
+# are seen as the command they run. Views are only ever added: a label found
+# in any view stands. Fail closed: a command too long to check in bounded
+# time is labelled too-large, a flat view that cannot be built unparsed.
 
-MK_CF_SAFE_RM="node_modules bin obj dist build .next coverage TestResults"
+MK_CF_SAFE_RM="node_modules bin obj dist build .next coverage TestResults __pycache__ .pytest_cache"
+# Longer commands (in characters), or more distinct rm segments, are not
+# matched but labelled too-large: the check stays well inside the hook
+# timeout, which would let the command run unchecked.
+MK_CF_MAX_CHARS=65536
+MK_CF_MAX_RM_SEGS=1000
+# Unique prefixes of long options, which git and GNU rm accept as the option:
+# --r .. --recursive, --fo .. --force, --ha .. --hard.
+MK_CF_RECURSIVE='--r(e(c(u(r(s(i(ve?)?)?)?)?)?)?)?'
+MK_CF_FORCE='--fo(r(ce?)?)?'
+MK_CF_HARD='--ha(rd?)?'
+# A word the shell computes ($VAR, ${VAR}, $'..', a glob such as /bin/r?)
+# right before rm's recursive option, after options rm also has: it may well
+# be rm, so it counts as one (fail closed, no safelist).
+MK_CF_DYNRM='(^|[[:space:]])[^[:space:]]*([$*?]|\[[^][:space:]]*\])[^[:space:]]*([[:space:]]+(-[dfiIPRrvWx]+|--[[:alnum:]-]+))*[[:space:]]+(-[dfiIPRrvWx]*[rR][dfiIPRrvWx]*|'"$MK_CF_RECURSIVE"')([[:space:]]|$)'
+# The approval (grant) file, case-insensitively (macOS file systems are):
+# its name, also through a glob that keeps "grant" (careful?grants,
+# careful*grants), or a glob on a memokit- path in a word that also names a
+# temp location or "careful" (/tmp/memokit-*, $TMPDIR/memokit-*) ->
+# careful-state, never approvable. Other globs that may reach it (careful*,
+# ../memokit-*) -> careful-state-glob, approvable: memokit-NNN is also a
+# common directory name.
+_mk_cf_mkglob='memokit-[^[:space:]/.]*[*?[]'
+_mk_cf_tmpword='(/tmp/|/private/tmp/|/var/folders/|tmpdir|careful)'
+MK_CF_STATE_RE="careful-grants|careful[^[:space:]/.]*[*?[][^[:space:]/.]*grant|${_mk_cf_tmpword}[^[:space:]]*${_mk_cf_mkglob}|${_mk_cf_mkglob}[^[:space:]]*${_mk_cf_tmpword}"
+MK_CF_STATE_GLOB_RE='careful[^[:space:]/.]*[*?[]|memokit-[^[:space:]/.]*[*?[]'
 # Set (as a local) only by mk_careful_labels; see _mk_cf_rm.
 _MK_CF_TEMP_OK=0
 
-# _mk_cf_has ERE TEXT -- case-sensitive ERE test, quiet on a bad regex.
-_mk_cf_has() { printf '%s' "$2" | grep -Eq -- "$1" 2>/dev/null; }
+# _mk_cf_has ERE TEXT [i] -- ERE test (case-insensitive with "i"), quiet.
+# Fail closed: a grep error (exit > 1) counts as a match.
+_mk_cf_has() {
+  local rc=0
+  printf '%s' "$2" | grep -Eq"${3:-}" -- "$1" 2>/dev/null || rc=$?
+  [ "$rc" -ne 1 ]
+}
+
+# _mk_cf_empty IN OUT -- true when a stage turned IN into an empty OUT that
+# IN does not explain (IN holds more than blanks, quotes, backslashes, ; | &).
+_mk_cf_empty() {
+  [ -z "$2" ] || return 1
+  case "$1" in *[!\\\"\'\;\|\&[:space:]]*) return 0 ;; esac
+  return 1
+}
 
 # _mk_cf_cmdre WORD SUB-ERE -- ERE: WORD is a command (not part of a longer
 # word) and SUB appears later in the segment as a whole word.
@@ -33,15 +77,18 @@ _mk_cf_cmdre() {
 # ERE; an ERE starting with "!" must NOT match. One grep per ERE over all
 # segments, so the fork count does not depend on the number of segments.
 _mk_cf_rule() {
-  local cur="$1" re
+  local cur="$1" re rc
   shift
   for re in "$@"; do
+    rc=0
     case "$re" in
-      '!'*) cur="$(printf '%s\n' "$cur" | grep -Ev -- "${re#!}" 2>/dev/null)" ;;
-      *) cur="$(printf '%s\n' "$cur" | grep -E -- "$re" 2>/dev/null)" ;;
+      '!'*) cur="$(printf '%s\n' "$cur" | grep -Ev -- "${re#!}" 2>/dev/null)" || rc=$? ;;
+      *) cur="$(printf '%s\n' "$cur" | grep -E -- "$re" 2>/dev/null)" || rc=$? ;;
     esac
+    # grep exits 1 for "no line"; more is an error: fail closed, a match.
+    [ "$rc" -gt 1 ] && return 0
   done
-  printf '%s' "$cur" | grep -q .
+  [ -n "$cur" ]
 }
 
 # _mk_cf_rm SEGMENT -- recursive rm with at least one target outside the
@@ -58,6 +105,7 @@ _mk_cf_rm() {
   for t in $1; do
     if [ "$started" -eq 0 ]; then
       u="$t"
+      # Kept for the raw view, which must label what 0.5.1 labelled.
       while :; do
         case "$u" in
           [\(\`\"\'\\\$\{]*) u="${u#?}" ;;
@@ -80,7 +128,7 @@ _mk_cf_rm() {
     t="${t#\"}"; t="${t#\'}"; t="${t%\)}"; t="${t%\`}"; t="${t%\"}"; t="${t%\'}"
     case "$t" in
       '') continue ;;
-      --recursive) recursive=1; continue ;;
+      --r*) if [[ --recursive == "$t"* ]]; then recursive=1; fi; continue ;;
       --*) continue ;;
       -*[rR]*) recursive=1; continue ;;
       -*) continue ;;
@@ -94,7 +142,8 @@ _mk_cf_rm() {
         # that the whole command is one simple rm (_MK_CF_TEMP_OK, local
         # there) and mk_temp_init found this session's temp tree. Subshell:
         # its entry listing needs globbing, which is off here.
-        if [ "${_MK_CF_TEMP_OK:-0}" = 1 ] && [ -n "${MK_TEMP_PROJECT_DIR:-}" ] &&
+        # Once unsafe, no more subshells: the verdict cannot change.
+        if [ "$unsafe" -eq 0 ] && [ "${_MK_CF_TEMP_OK:-0}" = 1 ] && [ -n "${MK_TEMP_PROJECT_DIR:-}" ] &&
            ( set +f; mk_temp_rm_safe "$t" ); then :; else unsafe=1; fi ;;
     esac
   done
@@ -130,32 +179,84 @@ mk_careful_strip() {
   printf '%s\n' "$1" | awk '/<</ { hd = 1 } match($0, /\\+$/) && RLENGTH % 2 == 1 { $0 = substr($0, 1, length($0) - 1); if (!hd && $0 !~ /[#'"'"']/) { buf = buf $0; next } } { print buf $0; buf = "" } END { if (buf != "") print buf }'
 }
 
+# mk_careful_flat TEXT -- the flat view, in one linear sed pass (no parser).
+# The expressions, in order, with an example each:
+#   quotes, backslashes deleted     r""m 'rm' \rm      -> rm rm rm
+#   ${ -> $                         "${RM}" -rf x       -> $RM} -rf x
+#   :- -> blank                     ${GIT:-git} push    -> $GIT git} push
+#   commas on a line with {         {rm,-rf,x}          -> {rm -rf x}
+#   ( ) { } ` -> blank              (git reset --hard)  -> " git reset --hard "
+#   .exe dropped from a word        kubectl.exe delete  -> kubectl delete
+#   rm git kubectl helm docker      RM -rf x, Git push  -> rm -rf x, git push
+#     dotnet in any case -> lower   (not after $: $GIT stays a variable)
+#   ; | -> blank-padded             x;git push -f|cat   -> x ; git push -f | cat
+#   blank before < > after a word   rm>/dev/null -rf x  -> rm >/dev/null -rf x
+#     (not after a digit, & < >:    2>&1 2>/dev/null &>f stay whole)
+#   blank before a glued &          git push -f&        -> git push -f &
+#   blank after that &              true &git push -f   -> true & git push -f
+# Quoted prose is flattened too: those false positives are accepted
+# (README). A per-call sentinel line proves sed read to the end; exit 1
+# otherwise.
+mk_careful_flat() {
+  local out nl='
+' tok="mk-sentinel-$$-$RANDOM-$RANDOM"
+  out="$(printf '%s\n%s\n' "$1" "$tok" | LC_ALL=C sed -E -e 's/["'\''\\]//g' -e 's/\$\{/$/g' -e 's/:-/ /g' \
+    -e '/[{]/s/,/ /g' -e 's/[`(){}]/ /g' -e 's/\.[Ee][Xx][Ee]([^[:alnum:]_.-]|$)/\1/g' \
+    -e 's/(^|[^[:alnum:]_.$-])[Rr][Mm]([^[:alnum:]_.-]|$)/\1rm\2/g' \
+    -e 's/(^|[^[:alnum:]_.$-])[Gg][Ii][Tt]([^[:alnum:]_.-]|$)/\1git\2/g' \
+    -e 's/(^|[^[:alnum:]_.$-])[Kk][Uu][Bb][Ee][Cc][Tt][Ll]([^[:alnum:]_.-]|$)/\1kubectl\2/g' \
+    -e 's/(^|[^[:alnum:]_.$-])[Hh][Ee][Ll][Mm]([^[:alnum:]_.-]|$)/\1helm\2/g' \
+    -e 's/(^|[^[:alnum:]_.$-])[Dd][Oo][Cc][Kk][Ee][Rr]([^[:alnum:]_.-]|$)/\1docker\2/g' \
+    -e 's/(^|[^[:alnum:]_.$-])[Dd][Oo][Tt][Nn][Ee][Tt]([^[:alnum:]_.-]|$)/\1dotnet\2/g' \
+    -e 's/[;|]/ & /g' -e 's/([^0-9&<> ])([<>])/\1 \2/g' \
+    -e 's/([^&<> ])&/\1 \&/g' -e 's/ &([^&>])/ \& \1/g')" || return 1
+  case "$out" in *"$nl$tok") printf '%s' "${out%"$nl$tok"}" ;; *) return 1 ;; esac
+}
+
 # mk_careful_segments CMD -- one shell segment per line. Quotes are not
 # parsed: a separator inside quotes only makes an extra, harmless split.
 mk_careful_segments() {
   printf '%s\n' "$1" | awk '{ gsub(/&&|\|\||;|\|/, "\n"); gsub(/[[:space:]]&[[:space:]]/, "\n"); print }'
 }
 
-# mk_careful_builtin CMD -- builtin labels the command matches, one per line.
+# mk_careful_builtin CMD -- builtin labels the command matches, one per line
+# (careful-state is checked by mk_careful_labels). A failing stage prints
+# unparsed and falls back to the unprocessed text, so no rule is skipped.
 mk_careful_builtin() {
-  local segs seg flat
-  if _mk_cf_has 'careful-grants' "$1"; then printf 'careful-state\n'; fi
-  flat="$(printf '%s' "$1" | tr '\n' ' ')"
-  if printf '%s' "$1" | grep -Eiq '(^|[^[:alnum:]_])(psql|mysql|mariadb|sqlite3|sqlcmd)([^[:alnum:]_./-]|$)' &&
-     printf '%s' "$flat" | grep -Eiq '(^|[^[:alnum:]_])(drop[[:space:]]+(table|database|schema)|truncate|delete[[:space:]]+from)([^[:alnum:]_]|$)'; then
+  local segs all rmsegs seg flat n rc=0 nl='
+' tok="mk-sentinel-$$-$RANDOM-$RANDOM"
+  if ! flat="$(printf '%s' "$1" | tr '\n' ' ')" || _mk_cf_empty "$1" "$flat"; then printf 'unparsed\n'; flat="$1"; fi
+  if { _mk_cf_has '(^|[^[:alnum:]_])(psql|pgcli|mysql|mariadb|sqlite3|sqlcmd)([^[:alnum:]_./-]|$)' "$1" i &&
+       _mk_cf_has '(^|[^[:alnum:]_])(drop[[:space:]]+(table|database|schema)|truncate|delete[[:space:]]+from)([^[:alnum:]_]|$)' "$1$nl$flat" i; } ||
+     _mk_cf_has '(^|[^[:alnum:]_.-])(dropdb|mysqladmin([[:space:]]+[^[:space:]]+)*[[:space:]]+drop)([[:space:]]|$)' "$1" i; then
     printf 'sql-destructive\n'
   fi
-  segs="$(mk_careful_segments "$1")"
+  # Per-call sentinel lines (first line through the splitter, END line from
+  # the filter) prove each awk read the input; no constant output fakes them.
+  all="$(mk_careful_segments "$tok$nl$1")"
+  case "$all" in
+    "$tok") all="" ;;
+    "$tok$nl"*) all="${all#"$tok$nl"}" ;;
+    *) printf 'unparsed\n'; all="$1" ;;
+  esac
+  # Only segments naming a tool (or holding a word the shell computes) can
+  # match a segment rule; drop the rest and duplicates once, not per rule.
+  segs="$(printf '%s\n' "$all" | awk -v s="$tok" '/git|rm|kubectl|helm|docker|dotnet|[$*?]|\[/ && !seen[$0]++ { print } END { print s }')"
+  case "$segs" in
+    "$tok") segs="" ;;
+    *"$nl$tok") segs="${segs%"$nl$tok"}" ;;
+    *) printf 'unparsed\n'; segs="$1" ;;
+  esac
   if _mk_cf_rule "$segs" "$(_mk_cf_cmdre git push)" \
-       '[[:space:]](-f|--force|-[a-zA-Z]*f[a-zA-Z]*|\+[^[:space:]]+)([[:space:]]|$)'; then
+       "[[:space:]](-f|$MK_CF_FORCE|-[a-zA-Z]*f[a-zA-Z]*|\\+[^[:space:]]+)([[:space:]]|\$)"; then
     printf 'git-force-push\n'
   fi
-  if _mk_cf_rule "$segs" "$(_mk_cf_cmdre git reset)" '[[:space:]]--hard([[:space:]]|$)'; then
+  if _mk_cf_rule "$segs" "$(_mk_cf_cmdre git reset)" "[[:space:]]$MK_CF_HARD([[:space:]]|\$)"; then
     printf 'git-reset-hard\n'
   fi
+  # No dry-run exemption: "-n" may be an option argument (git clean -f -e -n).
   if _mk_cf_rule "$segs" "$(_mk_cf_cmdre git clean)" \
-       '[[:space:]](--force|-[a-zA-Z]*f[a-zA-Z]*)([[:space:]]|$)' \
-       '![[:space:]](--dry-run|-[a-zA-Z]*n[a-zA-Z]*)([[:space:]]|$)'; then
+       "[[:space:]]($MK_CF_FORCE|-[a-zA-Z]*f[a-zA-Z]*)([[:space:]]|\$)"; then
     printf 'git-clean\n'
   fi
   if _mk_cf_rule "$segs" "$(_mk_cf_cmdre git branch)" '[[:space:]]-[a-zA-Z]*D[a-zA-Z]*([[:space:]]|$)' ||
@@ -171,19 +272,27 @@ mk_careful_builtin() {
        '[[:space:]](--staged|-S)([[:space:]]|$)' '[[:space:]](--worktree|-W)([[:space:]]|$)'; then
     printf 'git-discard-all\n'
   fi
-  # rm: one grep pre-selects segments, then the (fork-free) token parser runs.
+  # rm: a computed command word (one grep), else one grep pre-selects
+  # segments and the (fork-free) token parser runs, at most
+  # MK_CF_MAX_RM_SEGS times (bounded time; fail closed past that).
+  if _mk_cf_rule "$segs" "$MK_CF_DYNRM"; then printf 'rm-recursive\n'; fi
+  rmsegs="$(printf '%s\n' "$segs" | grep -E '(^|[^[:alnum:]_.-])rm[[:space:]]' 2>/dev/null)" || rc=$?
+  if [ "$rc" -gt 1 ]; then printf 'unparsed\n'; rmsegs="$segs"; fi
+  n=0
   while IFS= read -r seg; do
     [ -z "$seg" ] && continue
+    n=$((n + 1))
+    if [ "$n" -gt "$MK_CF_MAX_RM_SEGS" ]; then printf 'too-large\n'; break; fi
     if _mk_cf_rm "$seg"; then printf 'rm-recursive\n'; break; fi
   done <<EOF
-$(printf '%s\n' "$segs" | grep -E '(^|[^[:alnum:]_.-])rm[[:space:]]' 2>/dev/null)
+$rmsegs
 EOF
   if _mk_cf_rule "$segs" '(^|[^[:alnum:]_.-])dotnet[[:space:]]+ef[[:space:]]+database[[:space:]]+drop([[:space:]]|$)'; then
     printf 'ef-database-drop\n'
   fi
   if _mk_cf_rule "$segs" "$(_mk_cf_cmdre kubectl delete)"; then printf 'kubectl-delete\n'; fi
-  if _mk_cf_rule "$segs" "$(_mk_cf_cmdre helm 'uninstall|delete')"; then printf 'helm-uninstall\n'; fi
-  if _mk_cf_rule "$segs" '(^|[^[:alnum:]_.-])docker([[:space:]]+[^[:space:]]+)*[[:space:]]+(system[[:space:]]+prune|volume[[:space:]]+(prune|rm))([[:space:]]|$)'; then
+  if _mk_cf_rule "$segs" "$(_mk_cf_cmdre helm 'uninstall|delete|del|un')"; then printf 'helm-uninstall\n'; fi
+  if _mk_cf_rule "$segs" '(^|[^[:alnum:]_.-])docker([[:space:]]+[^[:space:]]+)*[[:space:]]+(system[[:space:]]+prune|volume[[:space:]]+(prune|rm|remove))([[:space:]]|$)'; then
     printf 'docker-prune\n'
   fi
 }
@@ -192,14 +301,17 @@ EOF
 _mk_cf_pattern() { printf '%s' "$MK_CAREFUL_PATTERNS_JSON" | jq -r ".[$1].$2" 2>/dev/null; }
 
 # mk_careful_project CMD -- labels of matching project patterns. A regex
-# grep -E rejects makes grep exit 2, i.e. no match: only that pattern is off.
+# grep -E rejects makes grep exit 2, i.e. no match: only that pattern is off
+# (session start names it). A failing jq prints unparsed instead.
 mk_careful_project() {
-  local n i
-  n="$(printf '%s' "$MK_CAREFUL_PATTERNS_JSON" | jq 'length' 2>/dev/null)" || n=0
+  local n i re lab
+  n="$(printf '%s' "$MK_CAREFUL_PATTERNS_JSON" | jq 'length' 2>/dev/null)" || { printf 'unparsed\n'; return 0; }
   i=0
   while [ "$i" -lt "${n:-0}" ]; do
-    if printf '%s' "$1" | grep -Eiq -- "$(_mk_cf_pattern "$i" match)" 2>/dev/null; then
-      _mk_cf_pattern "$i" label
+    re="$(_mk_cf_pattern "$i" match)" || { printf 'unparsed\n'; return 0; }
+    if printf '%s' "$1" | grep -Eiq -- "$re" 2>/dev/null; then
+      lab="$(_mk_cf_pattern "$i" label)" || lab=unparsed
+      printf '%s\n' "${lab:-unparsed}"
     fi
     i=$((i + 1))
   done
@@ -218,6 +330,11 @@ mk_careful_single_rm() {
   local c="$1" nl t first=1 targets=0 dd=0 inner _f rc=0
   nl='
 '
+  # Fail closed and fast: a simple rm is short (each target may cost a
+  # subshell in _mk_cf_rm), and ${c//...} below is quadratic in the number of
+  # continuations on bash 3.2.
+  [ "${#c}" -le 4096 ] || return 1
+  case "$c" in *"\\$nl"*) [ "${#c}" -le 1024 ] || return 1 ;; esac
   # A continuation inside single quotes stays literal in bash, while the join
   # below would remove it: refuse that combination.
   case "$c" in *"\\$nl"*) case "$c" in *\'*) return 1 ;; esac ;; esac
@@ -271,22 +388,81 @@ mk_careful_single_rm() {
   [ "$rc" -eq 0 ] && [ "$first" -eq 0 ] && [ "$targets" -gt 0 ]
 }
 
-# mk_careful_labels CMD -- builtin + project labels, de-duplicated, in order.
+# mk_careful_labels CMD -- builtin + project labels, de-duplicated, in order,
+# without awk: the de-duplication itself cannot lose a label.
 mk_careful_labels() {
-  local joined stripped _MK_CF_TEMP_OK=0
-  joined="$(mk_careful_join "$1")"
-  stripped="$(mk_careful_strip "$1")"
+  local out l seen=" "
+  out="$(_mk_cf_labels "$1")"
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    case "$seen" in *" $l "*) continue ;; esac
+    seen="$seen$l "
+    printf '%s\n' "$l"
+  done <<EOF
+$out
+EOF
+}
+
+# _mk_cf_labels CMD -- the labels, possibly repeated. Fail closed: a stage
+# that fails or comes back empty prints unparsed and the next stage works on
+# the unprocessed text, so a broken tool never turns into "no label".
+_mk_cf_labels() {
+  local t n tok joined stripped views flat _MK_CF_TEMP_OK=0 nl='
+'
+  # careful-state first, before any other stage can fail, and also when the
+  # command is too-large (approvable; careful-state never is): one grep -c on
+  # the raw text, on it with quotes, backslashes and newlines deleted, and on
+  # a sentinel line that must count. A tr or grep that fails or prints
+  # nothing gives careful-state too: the check could not be made.
+  if ! t="$(printf '%s' "$1" | LC_ALL=C tr -d "\\n\"'\\\\")" || _mk_cf_empty "$1" "$t"; then
+    printf 'careful-state\nunparsed\n'; t=""
+  fi
+  n="$(printf '%s\n%s\ncareful-grants\n' "$1" "$t" | grep -ciE "$MK_CF_STATE_RE")"
+  case "$n" in
+    1) ;;
+    ''|*[!0-9]*|0) printf 'careful-state\nunparsed\n' ;;
+    *) printf 'careful-state\n' ;;
+  esac
+  if _mk_cf_has "$MK_CF_STATE_GLOB_RE" "$1$nl$t" i; then printf 'careful-state-glob\n'; fi
+  if [ "${#1}" -gt "$MK_CF_MAX_CHARS" ]; then printf 'too-large\n'; return 0; fi
+  # join and strip only change backslash-newline continuations (and a
+  # trailing backslash): without one the views are the raw text itself (no
+  # awk, nothing to go wrong). With one, a per-call first line must come back
+  # first, or the raw text is used instead.
+  joined="$1"; stripped="$1"
+  case "$1" in *"\\$nl"*|*\\)
+    tok="mk-sentinel-$$-$RANDOM-$RANDOM"
+    joined="$(mk_careful_join "$tok$nl$1")"
+    case "$joined" in
+      "$tok") joined="" ;;
+      "$tok$nl"*) joined="${joined#"$tok$nl"}" ;;
+      *) printf 'unparsed\n'; joined="$1" ;;
+    esac
+    stripped="$(mk_careful_strip "$tok$nl$1")"
+    case "$stripped" in
+      "$tok") stripped="" ;;
+      "$tok$nl"*) stripped="${stripped#"$tok$nl"}" ;;
+      *) printf 'unparsed\n'; stripped="$1" ;;
+    esac ;;
+  esac
   # Seen by _mk_cf_rm through dynamic scope; never set anywhere else.
   if [ -n "${MK_TEMP_PROJECT_DIR:-}" ] && [ "$joined" = "$stripped" ] &&
      mk_careful_single_rm "$1"; then
     _MK_CF_TEMP_OK=1
   fi
-  {
-    mk_careful_builtin "$joined"; mk_careful_project "$joined"
-    if [ "$stripped" != "$joined" ]; then
-      mk_careful_builtin "$stripped"; mk_careful_project "$stripped"
-    fi
-  } | awk 'NF && !seen[$0]++'
+  # All views in one text: every rule is per line or "anywhere in the text",
+  # so one pass over it is the union of a pass per view.
+  views="$joined"
+  [ "$stripped" = "$joined" ] || views="$views$nl$stripped"
+  if flat="$(mk_careful_flat "$views")" && ! _mk_cf_empty "$views" "$flat"; then
+    [ "$flat" = "$views" ] || views="$views$nl$flat"
+  else
+    printf 'unparsed\n'
+  fi
+  if _mk_cf_has "$MK_CF_STATE_RE" "$views" i; then printf 'careful-state\n'; fi
+  if _mk_cf_has "$MK_CF_STATE_GLOB_RE" "$views" i; then printf 'careful-state-glob\n'; fi
+  mk_careful_builtin "$views"
+  mk_careful_project "$views"
 }
 
 # mk_careful_bad_patterns -- labels of project patterns grep -E rejects.

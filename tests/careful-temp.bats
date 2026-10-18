@@ -271,3 +271,62 @@ C" ]
   chmod 700 "$TT_ROOT"
   allowed "rm -rf $TT_SP/rv10a"
 }
+
+@test "temp rm (0.5.2): quoted, prefixed or grouped rm never gets the exemption" {
+  # shellcheck disable=SC2016
+  for c in \
+    "\"rm\" -rf $TT_SP/rv10a" \
+    "'rm' -rf $TT_SP/rv10a" \
+    "r\"\"m -rf $TT_SP/rv10a" \
+    "r''m -rf $TT_SP/rv10a" \
+    "\"r\"m -rf $TT_SP/rv10a" \
+    "r\\m -rf $TT_SP/rv10a" \
+    "\$'rm' -rf $TT_SP/rv10a" \
+    "\"/bin/rm\" -rf $TT_SP/rv10a" \
+    "=rm -rf $TT_SP/rv10a" \
+    "nohup rm -rf $TT_SP/rv10a" \
+    "time rm -rf $TT_SP/rv10a" \
+    "timeout 5 rm -rf $TT_SP/rv10a" \
+    "env X=1 rm -rf $TT_SP/rv10a" \
+    "sudo -u root rm -rf $TT_SP/rv10a" \
+    "xargs -0 rm -rf $TT_SP/rv10a" \
+    "command \"rm\" -rf $TT_SP/rv10a" \
+    "\$RM -rf $TT_SP/rv10a" \
+    "\$(echo rm) -rf $TT_SP/rv10a" \
+    "rm \"-rf\" $TT_SP/rv10a" \
+    "rm \\-rf $TT_SP/rv10a" \
+    "rm --rec $TT_SP/rv10a" \
+    "{rm,-rf,$TT_SP/rv10a}" \
+    "/bin/rm(N) -rf $TT_SP/rv10a" \
+    "rm>/dev/null -rf $TT_SP/rv10a" \
+    "> /dev/null rm -rf $TT_SP/rv10a" \
+    "(rm -rf $TT_SP/rv10a)&" \
+    "find $TT_SP -exec rm -rf {} +"; do
+    denied "$c"
+  done
+  # the plain forms keep the exemption
+  allowed "rm -rf $TT_SP/rv10a"
+  allowed "rm -rf \"$TT_SP/rv10a\""
+  allowed "/bin/rm -r -f -- $TT_SP/rv10a"
+  allowed "rm -rf $TT_SP/mut.*"
+}
+
+@test "temp rm (0.5.2): mk_careful_single_rm rejects wrapped, prefixed, quoted and oversized forms" {
+  # shellcheck disable=SC2016
+  run "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; . '$HOOKS/lib/careful.sh'
+    nl='
+'
+    long=\"rm -rf x\"; i=0; while [ \$i -lt 600 ]; do long=\"\$long \\\\\$nl x\"; i=\$((i + 1)); done
+    for c in '\"rm\" -rf x' \"'rm' -rf x\" 'r\"\"m -rf x' \"r''m -rf x\" '\\rm -rf x' '\$'\"'rm'\"' -rf x' \\
+             '\"/bin/rm\" -rf x' '=rm -rf x' 'command rm -rf x' 'builtin rm -rf x' 'exec rm -rf x' \\
+             'nohup rm -rf x' 'time rm -rf x' 'env rm -rf x' 'env X=1 rm -rf x' 'sudo rm -rf x' \\
+             'timeout 5 rm -rf x' 'xargs rm -rf x' 'X=1 rm -rf x' '\$RM -rf x' '\$(echo rm) -rf x' \\
+             '{rm,-rf,x}' '/bin/rm(N) -rf x' 'rm>/dev/null -rf x' 'rm --rec x' \"\$long\"; do
+      if mk_careful_single_rm \"\$c\"; then echo \"accepted: \$(printf '%s' \"\$c\" | cut -c1-40)\"; fi
+    done
+    mk_careful_single_rm 'rm -rf x' && echo plain-ok
+    mk_careful_single_rm \"rm -rf \\\\\${nl}x\" && echo continued-ok"
+  [ "$status" -eq 0 ]
+  [ "$output" = "plain-ok
+continued-ok" ] || { echo "$output"; false; }
+}

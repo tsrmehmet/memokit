@@ -27,10 +27,22 @@ static_deny() {
   printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "PreToolUse",\n    "permissionDecision": "deny",\n    "permissionDecisionReason": "%s"\n  }\n}\n' "$(mk_msg "$1")"
 }
 
+# deny REASON -- deny JSON from jq; a jq that fails or prints anything but
+# the deny object gives a static deny.
+deny() {
+  local out
+  if out="$(jq -n --arg r "$1" \
+      '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}' 2>/dev/null)"; then
+    case "$out" in
+      '{'*'"permissionDecision": "deny"'*'}') printf '%s\n' "$out"; return 0 ;;
+    esac
+  fi
+  static_deny CF_JQ_FAILED_STATIC
+}
+
 if ! mk_load_config; then
   if [ "$MK_CONFIG_ERR" = "jq" ]; then static_deny CONFIG_NO_JQ_STATIC; exit 0; fi
-  jq -n --arg r "$(mk_msg CONFIG_INVALID "$MK_CONFIG_ERR")" \
-    '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+  deny "$(mk_msg CONFIG_INVALID "$MK_CONFIG_ERR")"
   exit 0
 fi
 
@@ -40,20 +52,14 @@ if [ -z "$PAYLOAD" ]; then
   exit 0
 fi
 
-deny() {
-  local out
-  if out="$(jq -n --arg r "$1" \
-      '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}' 2>/dev/null)" &&
-     [ -n "$out" ]; then
-    printf '%s\n' "$out"
-  else
-    static_deny CF_JQ_FAILED_STATIC
-  fi
-}
-
-if ! tool="$(printf '%s' "$PAYLOAD" | jq -r '.tool_name // empty' 2>/dev/null)"; then
+# "T" sentinel: a jq that fails or prints anything else is not trusted.
+if ! tool="$(printf '%s' "$PAYLOAD" | jq -r '"T" + (.tool_name // "" | tostring)' 2>/dev/null)"; then
   deny "$(mk_msg CF_INVALID_JSON)"; exit 0
 fi
+case "$tool" in
+  T*) tool="${tool#T}" ;;
+  *) deny "$(mk_msg CF_INVALID_JSON)"; exit 0 ;;
+esac
 
 case "$tool" in
   Bash) ;;
@@ -66,7 +72,8 @@ case "$tool" in
     hops=0
     while :; do
       case "$fpath" in
-        *careful-grants*) deny "$(mk_msg CF_STATE)"; exit 0 ;;
+        # any case: macOS file systems are case-insensitive
+        *[Cc][Aa][Rr][Ee][Ff][Uu][Ll]-[Gg][Rr][Aa][Nn][Tt][Ss]*) deny "$(mk_msg CF_STATE)"; exit 0 ;;
       esac
       [ -L "$fpath" ] || break
       hops=$((hops + 1))
@@ -109,12 +116,21 @@ if mk_careful_single_rm "$cmd"; then
 fi
 labels="$(mk_careful_labels "$cmd")"
 [ -n "$labels" ] || exit 0
-
-if printf '%s\n' "$labels" | grep -qx 'careful-state'; then
-  deny "$(mk_msg CF_STATE)"; exit 0
-fi
+# Membership in bash, not grep: a failing tool must not read as "absent".
+# (labels is short: one line per distinct label.)
+nl='
+'
+case "$nl$labels$nl" in
+  *"${nl}careful-state${nl}"*) deny "$(mk_msg CF_STATE)"; exit 0 ;;
+esac
 
 code="$(mk_careful_code "$cmd")"
 mk_careful_consume "$code" && exit 0
-deny "$(mk_msg CF_BLOCKED "$(printf '%s\n' "$labels" | paste -sd, - | sed 's/,/, /g')" "$code")"
+# Every message names every label: a special case must not hide the rest.
+all="${labels//$nl/, }"
+case "$nl$labels$nl" in
+  *"${nl}careful-state-glob${nl}"*) deny "$(mk_msg CF_STATE_GLOB "$all" "$code")"; exit 0 ;;
+  *"${nl}too-large${nl}"*) deny "$(mk_msg CF_TOO_LARGE "$all" "$code")"; exit 0 ;;
+esac
+deny "$(mk_msg CF_BLOCKED "$all" "$code")"
 exit 0

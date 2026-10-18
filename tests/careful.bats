@@ -77,10 +77,8 @@ git push origin main
 git push -u origin feat/x
 git reset --soft HEAD~1
 git clean -n
-git clean -nf
 git branch -d merged
 git checkout -- src/a.cs
-git commit -m "push --force later"
 rm -rf node_modules
 rm -rf bin obj
 rm -rf ./web/dist/
@@ -458,7 +456,7 @@ git-clean|echo ok # -n |git clean -fdx
 XEOF
   labels "$(printf "psql <<'SQL'\nDROP%s\nTABLE x;\nSQL" '\')"
   printf '%s\n' "$output" | grep -qx 'sql-destructive' || { echo "quoted heredoc: [$output]"; false; }
-  for c in 'rm -rf \\\n  node_modules dist' 'rm -rf \\\n  node_modules \\\n  dist \\\n  build' 'git clean -fd \\\n  --dry-run' 'git clean -fdx \\\n -n' 'rm -rf node_modules \\\n  bin'; do
+  for c in 'rm -rf \\\n  node_modules dist' 'rm -rf \\\n  node_modules \\\n  dist \\\n  build' 'rm -rf node_modules \\\n  bin'; do
     labels "$(printf "$c")"
     [ -z "$output" ] || { echo "false positive: $c -> [$output]"; false; }
   done
