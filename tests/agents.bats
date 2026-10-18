@@ -31,3 +31,7 @@ GATE_STEP='If `.claude/memokit.json` does not exist in the project root, stop'
   grep -qF 'red output' "$MK_REPO/agents/coder.md"
   grep -qF 'WORKING-MODEL.md §2' "$MK_REPO/agents/coder.md"
 }
+@test "both agents point to §7" {
+  for a in coder reviewer; do grep -qF 'Temp space (WORKING-MODEL.md §7)' "$MK_REPO/agents/$a.md" || { echo "$a"; false; }; done
+  grep -qF 'mutation' "$MK_REPO/agents/reviewer.md"
+}

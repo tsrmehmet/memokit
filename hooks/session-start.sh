@@ -180,6 +180,50 @@ if [ -f "$MK_ROOT/docs/HISTORY.md" ]; then
 fi
 NOTES="${NOTES}${nl}${nl}$(mk_msg SS_RESUME_NOTE)"
 
+# Leftover temp entries of earlier sessions and the low-disk floor. Both are
+# best effort and silent on any failure; the leftover total is cached for
+# check-disk.sh's Stop message (same sanitised session id, same state-file
+# safety rules: no symlink, owned by us, umask-077 temp file + mv).
+LEFT_TXT=""
+TEMP_LIB=0
+# shellcheck source-path=SCRIPTDIR source=lib/temp.sh
+. "$MK_LIB_DIR/temp.sh" 2>/dev/null && TEMP_LIB=1
+if [ "${MEMOKIT_SCRATCH_OFF:-0}" != "1" ] && [ "$TEMP_LIB" -eq 1 ] \
+   && mk_temp_init "$PAYLOAD" >/dev/null 2>&1; then
+  ss_list="$(mk_temp_stale_list 3 2>/dev/null)" && {
+    ss_n=0; ss_kb=0; ss_trunc=""
+    while IFS= read -r ss_line; do
+      case "$ss_line" in
+        TRUNCATED) ss_trunc="≥ " ;;
+        [0-9]*) ss_n=$((ss_n + 1)); ss_kb=$((ss_kb + ${ss_line%%"$(printf '\t')"*})) ;;
+      esac
+    done <<EOF2
+$ss_list
+EOF2
+    ss_sid="$(printf '%s' "$(printf '%s' "$PAYLOAD" | jq -r '.session_id // "unknown"' 2>/dev/null)" | tr -c 'A-Za-z0-9_-' _)"
+    [ -n "$ss_sid" ] || ss_sid="unknown"
+    ss_f="$(mk_tmp "temp-leftover-${ss_sid}")"
+    if [ ! -L "$ss_f" ] && { [ ! -e "$ss_f" ] || { [ -f "$ss_f" ] && [ -O "$ss_f" ]; }; }; then
+      ss_t="$(umask 077; mktemp "$ss_f.XXXXXX" 2>/dev/null)" && {
+        if printf '%s' "$ss_kb" > "$ss_t" 2>/dev/null; then mv -f "$ss_t" "$ss_f" 2>/dev/null || rm -f "$ss_t"; else rm -f "$ss_t"; fi
+      }
+    fi
+    if [ "$ss_n" -gt 0 ] && [ "$ss_kb" -ge $(( MK_SCRATCH_REPORT_MIN_MB * 1024 )) ]; then
+      LEFT_TXT="${nl}${nl}$(mk_msg SS_TEMP_LEFTOVER "$ss_n" "${ss_trunc}$(mk_human_kb "$ss_kb")")"
+    fi
+  }
+fi
+if [ "${MEMOKIT_DISK_OFF:-0}" != "1" ] && [ "$MK_DISK_MIN_FREE_GB" -gt 0 ] \
+   && [ "$TEMP_LIB" -eq 1 ]; then
+  ss_free="$(mk_disk_free_kb 2>/dev/null)" || ss_free=""
+  case "$ss_free" in
+    ''|*[!0-9]*) ;;
+    *) if [ "$ss_free" -lt $(( MK_DISK_MIN_FREE_GB * 1048576 )) ]; then
+         LEFT_TXT="${LEFT_TXT}${nl}${nl}$(mk_msg SS_DISK_LOW "$(mk_human_kb "$ss_free")" "$MK_DISK_MIN_FREE_GB")"
+       fi ;;
+  esac
+fi
+
 # WORKING-MODEL.md is a plugin-shipped doc (sibling of hooks/, i.e.
 # $MK_HOOKS_DIR/..), not a project file -- it does not exist yet (see Task
 # 14), so this must tolerate its absence forever, not just until it ships.
@@ -190,5 +234,5 @@ fi
 
 # RISK was already computed above (before the invalid-config branch), since
 # it does not depend on config validity.
-ctx="$(mk_msg SS_HEADER "$MK_NAME")${nl}${nl}${STATE}${nl}${nl}[knowledge-health] ${HEALTH}${nl}${nl}${DOCS}${NOTES}${MISSING_TXT}${WARN_TXT}${RISK:+${nl}${RISK}}${WM:+${nl}${nl}${WM}}"
+ctx="$(mk_msg SS_HEADER "$MK_NAME")${nl}${nl}${STATE}${nl}${nl}[knowledge-health] ${HEALTH}${nl}${nl}${DOCS}${NOTES}${MISSING_TXT}${WARN_TXT}${LEFT_TXT}${RISK:+${nl}${RISK}}${WM:+${nl}${nl}${WM}}"
 emit_ctx "$ctx"

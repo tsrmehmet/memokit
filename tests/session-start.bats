@@ -60,3 +60,87 @@ load helpers
   ctx | grep -q 'sshpass-p'
   lacks "$output" 'hunter2pass'
 }
+
+# --- 0.5.0: temp leftovers + low disk ---------------------------------------
+lo_setup() {
+  mk_project '{"version":1,"project":{"name":"Demo","tag":"DMO"},"language":"en","scratch":{"reportMinMB":1}}'
+  mk_temp_tree
+  export TMPDIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkss.XXXXXX")"
+  unset MEMOKIT_SCRATCH_OFF MEMOKIT_DISK_OFF
+  export MEMOKIT_DF_KB=$((500*1048576))
+  OLDS="aaaaaaaa-0000-0000-0000-000000000001"
+  mk_blob "$TT_PROJ/$OLDS/scratchpad/f" 2048
+  : > "$TT_TDIR/$OLDS.jsonl"; touch -t 202001010000 "$TT_TDIR/$OLDS.jsonl"
+  touch -t 202001010000 "$TT_TDIR/$TT_SID.jsonl"
+}
+lo_cleanup() { rm -rf "$TMPDIR" "${TROOT_LOGICAL:-}"; unset MEMOKIT_DF_KB; }
+
+@test "stale leftovers >= reportMinMB give one line naming /memokit:sweep" {
+  lo_setup
+  run_hook session-start.sh "$TT_PAYLOAD"
+  [ "$status" -eq 0 ]
+  [ "$(ctx | grep -c '/memokit:sweep')" -eq 1 ]
+  ctx | grep -q '2 MB'
+  lo_cleanup
+}
+@test "leftovers below reportMinMB give no line" {
+  lo_setup
+  mk_project '{"version":1,"project":{"name":"Demo","tag":"DMO"},"language":"en","scratch":{"reportMinMB":50}}'
+  run_hook session-start.sh "$TT_PAYLOAD"
+  ! ctx | grep -q '/memokit:sweep'
+  lo_cleanup
+}
+@test "non-stale sibling is not counted" {
+  lo_setup
+  touch -t 203001010000 "$TT_TDIR/$OLDS.jsonl"
+  run_hook session-start.sh "$TT_PAYLOAD"
+  ! ctx | grep -q '/memokit:sweep'
+  lo_cleanup
+}
+@test "leftover total is cached for check-disk (same file path)" {
+  lo_setup
+  run_hook session-start.sh "$TT_PAYLOAD"
+  h="$(printf '%s' "$PROJ" | cksum | cut -d' ' -f1)"
+  f="$TMPDIR/memokit-$h-temp-leftover-$TT_SID"
+  [ -f "$f" ]
+  [ "$(cat "$f")" -ge 2048 ]
+  # check-disk's Stop path reads it
+  pl="$(jq -nc --arg s "$TT_SID" --arg t "$TT_TDIR/$TT_SID.jsonl" --arg cwd "$PROJ" '{hook_event_name:"Stop",session_id:$s,transcript_path:$t,cwd:$cwd}')"
+  MEMOKIT_DF_KB=$((20*1048576)) run_hook check-disk.sh "$pl"
+  printf '%s' "$output" | jq -r '.systemMessage' | grep -q 'other leftovers: 2 MB'
+  lo_cleanup
+}
+@test "cache write refuses a symlink target" {
+  lo_setup
+  h="$(printf '%s' "$PROJ" | cksum | cut -d' ' -f1)"
+  echo keep > "$TMPDIR/victim"; ln -s "$TMPDIR/victim" "$TMPDIR/memokit-$h-temp-leftover-$TT_SID"
+  run_hook session-start.sh "$TT_PAYLOAD"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TMPDIR/victim")" = keep ]
+  lo_cleanup
+}
+@test "MEMOKIT_SCRATCH_OFF=1 suppresses line and cache" {
+  lo_setup
+  MEMOKIT_SCRATCH_OFF=1 run_hook session-start.sh "$TT_PAYLOAD"
+  ! ctx | grep -q '/memokit:sweep'
+  ! ls "$TMPDIR"/memokit-*-temp-leftover-* >/dev/null 2>&1
+  lo_cleanup
+}
+@test "no temp tree leaves output without leftover line" {
+  mk_project '{"version":1,"project":{"name":"Demo","tag":"DMO"},"language":"en"}'
+  export MEMOKIT_DF_KB=$((500*1048576))
+  run_hook session-start.sh '{"session_id":"s","transcript_path":"/nonexistent/x/s.jsonl"}'
+  [ "$status" -eq 0 ]
+  ! ctx | grep -q '/memokit:sweep'
+  unset MEMOKIT_DF_KB
+}
+@test "free space below the floor adds the low-disk line; above or off does not" {
+  mk_project '{"version":1,"project":{"name":"Demo","tag":"DMO"},"language":"en"}'
+  MEMOKIT_DF_KB=$((10*1048576)) run_hook session-start.sh '{}'
+  [ "$status" -eq 0 ]
+  ctx | grep -q '10.0 GB'; ctx | grep -q '30 GB'
+  MEMOKIT_DF_KB=$((100*1048576)) run_hook session-start.sh '{}'
+  ! ctx | grep -q 'DMO-DISK'
+  MEMOKIT_DISK_OFF=1 MEMOKIT_DF_KB=$((10*1048576)) run_hook session-start.sh '{}'
+  ! ctx | grep -q 'DMO-DISK'
+}

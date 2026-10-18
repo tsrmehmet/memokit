@@ -15,6 +15,8 @@
     "custom": [ { "match": "mockup|react|tailwind", "text": "Frontend work → frontend-design skill." } ]
   },
   "graph": { "root": "src", "maxCommitsBehind": 20 },
+  "scratch": { "agentMaxMB": 1024, "staleAfterHours": 24, "reportMinMB": 500 },
+  "disk": { "minFreeGB": 30, "dropWarnGB": 10 },
   "careful": {
     "patterns": [ { "match": "kubectl[[:space:]]+(apply|patch|scale)", "label": "kubectl-mutate" } ]
   }

@@ -53,7 +53,7 @@ MK_T_GS_FILTER_BRANCH="Alt ajan 'git filter-branch' ÇALIŞTIRAMAZ (geçmişi ye
 MK_T_GS_COMMIT_TREE="Alt ajan 'git commit-tree' ÇALIŞTIRAMAZ (commit nesnesi oluşturur, WORKING-MODEL.md §1). Engellenen komut: %s"
 MK_T_GS_BRANCH_FORCE="Alt ajan dalı ZORLA TAŞIYAMAZ / YENİDEN ADLANDIRAMAZ ('git branch -f/-m/-M', memokit:coder kural 0). Engellenen komut: %s"
 MK_T_GS_GH_PR_MERGE="Alt ajan PR MERGE EDEMEZ ('gh pr merge', WORKING-MODEL.md §1). Değişiklikleri dalda bırak ve raporla. Engellenen komut: %s"
-MK_T_IR_RULES_BASE="[@TAG@-KURAL] 1) %s altına ana oturum kod YAZMAZ — Agent(subagent_type:memokit:coder) aç, sonra KENDİN doğrula (git status + testi kendin koştur). 2) Karar noktası (bağımlılık | şema | wire contract | güvenlik | geri dönüşü zor mimari) → DUR, önerini GEREKÇESİYLE yaz, arada kaldıysan konsey öner, KULLANICIYA SOR (WORKING-MODEL.md §2 formatı). 3) Her seçimde önerilen seçenek + gerekçe; nötr liste yok. 4) İş bitince docs/STATE.md güncelle + commit. 5) Ölçmediğini iddia etme: test yeşil değilse tamamlandı deme, alt ajan raporunu kendin doğrula (WORKING-MODEL.md §3). 6) Uygun skill bilmiyorsan find-skills ile ara."
+MK_T_IR_RULES_BASE="[@TAG@-KURAL] 1) %s altına ana oturum kod YAZMAZ — Agent(subagent_type:memokit:coder) aç, sonra KENDİN doğrula (git status + testi kendin koştur). 2) Karar noktası (bağımlılık | şema | wire contract | güvenlik | geri dönüşü zor mimari) → DUR, önerini GEREKÇESİYLE yaz, arada kaldıysan konsey öner, KULLANICIYA SOR (WORKING-MODEL.md §2 formatı). 3) Her seçimde önerilen seçenek + gerekçe; nötr liste yok. 4) İş bitince docs/STATE.md güncelle + commit. 5) Ölçmediğini iddia etme: test yeşil değilse tamamlandı deme, alt ajan raporunu kendin doğrula (WORKING-MODEL.md §3). 6) Uygun skill bilmiyorsan find-skills ile ara. 7) Geçici alan: yalnız takip edilen dosyaları kopyala (WORKING-MODEL.md §7), repo klasörünü cp -R ile kopyalama; dönmeden önce scratch'ini sil."
 MK_T_IR_RULES_BASE_STATIC="[@TAG@-KURAL] Korunan klasorlere ana oturum kod YAZMAZ, memokit:coder alt ajanini kullan. Karar noktasinda DUR ve kullaniciya sor. Olcmedigini iddia etme."
 MK_T_IR_HINT_DEBUGGING=" [SKILL] Hata avı → superpowers:systematic-debugging: önce hipotez + kanıt, sonra düzeltme. Çok sayıda kırmızı ya da flaky test (CI/E2E) → /memokit:triage."
 MK_T_IR_HINT_DECISION=" [SKILL] Karar/mimari → önce superpowers:brainstorming. Geri dönüşü zor ya da arada kaldığın karar → kullanıcıya konsey (llm-council) öner, ONAY alınca koştur; sonuç docs/DECISIONS.md."
@@ -122,6 +122,23 @@ MK_T_GR_SCRIPT_OK="[@TAG@] Kod grafiği %s ile tazelendi."
 MK_T_IR_CAREFUL_GRANTED=" [CAREFUL] Onay %s kaydedildi (tek kullanımlık, 10 dakika): aynı komutu birebir şimdi tekrar çalıştır."
 MK_T_CF_BLOCKED="[@TAG@-CAREFUL] %s: yıkıcı komut engellendi. Kullanıcıya bir iki cümleyle komutun ne yaptığını ve neden gerektiğini anlat; kabul ederse bir sonraki mesajına 'onay %s' ile başlasın. Sonra aynı komutu birebir tekrar çalıştır. Bu engeli başka bir komutla dolanma."
 MK_T_CF_STATE="[@TAG@-CAREFUL] memokit'in onay dosyalarına dokunan komutlar engellenir; onay yalnızca kullanıcının kendi mesajından gelir."
+MK_T_CF_NUL="[@TAG@-CAREFUL] Komut bir NUL karakteri içeriyor; denetlenen metin çalışacak komuttan farklı olurdu, reddedildi. Komutu NUL olmadan yeniden çalıştır."
 MK_T_CF_INVALID_JSON="Hook payload'ı geçerli JSON değil; komut yıkıcı kalıplar için denetlenemiyor, güvenlik için reddediliyor."
 MK_T_CF_EMPTY_STDIN_STATIC="Boş stdin alındı; PreToolUse payload'ı okunamadı, komut yıkıcı kalıplar için denetlenemiyor, güvenlik için reddediliyor. Acil durum: MEMOKIT_CAREFUL_OFF=1 ya da MEMOKIT_GUARD_OFF=1."
 MK_T_CF_JQ_FAILED_STATIC="jq -n çağrısı başarısız oldu; asıl ret nedeni gösterilemiyor, güvenlik için reddediliyor. Acil durum: MEMOKIT_CAREFUL_OFF=1."
+MK_T_SS_SCRATCH_BLOCK="[@TAG@-SUBAGENT-SCRATCH] Oturumun scratchpad'inde %s geçici dosya oluşturdun (sınır %s MB). Henüz dönme. Orkestratör bir girdiyi korumanı istediyse içine .memokit-keep dosyası ekle ve raporunda belirt. Girdi kardeş bir ajana aitse silme; raporunda adını an."
+MK_T_SS_SCRATCH_RMLIST="Sen başladığından beri oluşturulan en büyük girdiler (senin değilse paralel bir ajanınki):
+%s
+Sana ait her birini kendi Bash çağrısıyla sil: rm -rf <literal mutlak yol>, yukarıda basıldığı gibi (değişken, glob, sondaki slash, && veya ; olmadan, çağrı başına tek yol; listelenen yollar scratchpad'in doğrudan çocuklarıdır, bu yüzden silme onaysız çalışır)."
+MK_T_SS_SCRATCH_UNVERIFIED="[@TAG@-SUBAGENT-SCRATCH] Bu dosya sistemi oluşturulma zamanı bildirmiyor, bu girdiler sen başlamadan önce de var olabilir:
+%s
+Dokunmadan önce her birini senin oluşturduğunu doğrula. Yalnızca sana ait olanı, literal mutlak yolla ve joker karaktersiz sil; diğerleri için orkestratöre sor ve raporunda adını an."
+MK_T_SS_SCRATCH_PREEXISTING="[@TAG@-SUBAGENT-SCRATCH] Bu girdiler sen başlamadan ÖNCE var olan bir scratchpad dizininin içinde (senin değil): o üst dizini SİLME. Yalnızca listelenen yolun kendisini sil (silmek için kullanıcı onayı gerekir) ya da orkestratörden silmesini iste ve raporunda belirt:
+%s"
+MK_T_SS_SCRATCH_UNUSUAL="[@TAG@-SUBAGENT-SCRATCH] %s girdinin adı olağandışı (toplam %s) ve listelenmedi. Bunları desenle ya da joker karakterle silme; raporunda adlarını an ve orkestratöre sor."
+MK_T_SS_SCRATCH_GIVEUP="[@TAG@-SUBAGENT-SCRATCH] 3 hatırlatmadan sonra scratchpad'de hâlâ %s geçici dosya var, dönmene izin veriliyor. Raporunda listele."
+MK_T_DK_DROP="[@TAG@-DISK] Bu komut %s disk kullandı; şu an %s boş, bu oturumun temp'i %s. Büyük geçici dosya bıraktıysa kendi oluşturduklarını sil (tam yol, joker yok) ya da kullanıcıya söyle."
+MK_T_DK_FLOOR_CTX="[@TAG@-DISK] Boş disk alanı %s'a düştü (eşik %s GB). Büyük indirme ve build'lerden kaçın; oluşturduğun geçici dosyaları temizle ve kullanıcıya bildir."
+MK_T_DK_FLOOR_STOP="[@TAG@-DISK] Boş disk alanı %s'a düştü (eşik %s GB). Bu oturumun temp'i: %s; diğer kalıntılar: %s. Temizlemek için /memokit:sweep'e bak."
+MK_T_SS_TEMP_LEFTOVER="[@TAG@-DISK] Önceki oturumlardan kalan %s eski temp girdisi %s disk tutuyor. Kullanıcıya söyle ve /memokit:sweep öner; kendin silme."
+MK_T_SS_DISK_LOW="[@TAG@-DISK] Boş disk alanı %s'a düştü (eşik %s GB). Büyük indirme ve build'lerden kaçın, kullanıcıya bildir."

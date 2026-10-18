@@ -6,6 +6,15 @@ runs via `jq -r -f`.
 `graph.sh` (code-graph staleness) is sourced after `mk_load_config` by
 `inject-rules.sh` and `skills/handoff/scripts/memokit-graph.sh`, so the hint and
 the handoff refresh share one definition of "stale".
+`temp.sh` (Claude Code's per-session temp tree and free disk space) is sourced
+after `common.sh` by the scratch/disk hooks (`check-subagent-scratch.sh`,
+`check-disk.sh`, `session-start.sh`), by `guard-destructive.sh` for the
+`rm -rf` exemption of spec 3b that `careful.sh` applies, and by the sweep CLI,
+so they all locate the temp tree, measure a footprint and decide "stale" the
+same way. Callers run
+`mk_load_config` first (staleness reads `MK_SCRATCH_STALE_HOURS`), then
+`mk_temp_init "$PAYLOAD"`; the live measurements it relies on are recorded in
+its header.
 
 Every hook in this plugin starts with one of the two canonical preambles
 below, copied verbatim (only `<hook-name>` changes). This keeps the gate

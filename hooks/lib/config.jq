@@ -1,6 +1,6 @@
 # Validates .claude/memokit.json and emits shell assignments (quoted with @sh).
 def err($m): "MK_CONFIG_ERR=\($m | @sh)";
-def known: ["$schema","version","project","language","guardedDirs","contextBudget","stateStale","sessionStart","hints","graph","careful"];
+def known: ["$schema","version","project","language","guardedDirs","contextBudget","stateStale","sessionStart","hints","graph","careful","scratch","disk"];
 def builtin_all: ["debugging","decision","review","handoff","resume","graphify"];
 def dir_ok: type == "string"
   and test("^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$")
@@ -25,6 +25,13 @@ elif has("careful") and ((.careful | type) != "object"
          (type != "object")
          or ((.match | type) != "string") or ((.match | length) == 0)
          or ((.label | type) != "string") or ((.label | test("^[a-z0-9][a-z0-9-]{0,31}$")) | not)))) then err("careful")
+elif has("scratch") and ((.scratch | type) != "object"
+    or ((.scratch.agentMaxMB // 1024) | (type != "number") or (. < 1))
+    or ((.scratch.staleAfterHours // 24) | (type != "number") or (. < 1))
+    or ((.scratch.reportMinMB // 500) | (type != "number") or (. < 0))) then err("scratch")
+elif has("disk") and ((.disk | type) != "object"
+    or ((.disk.minFreeGB // 30) | (type != "number") or (. < 0))
+    or ((.disk.dropWarnGB // 10) | (type != "number") or (. < 1))) then err("disk")
 else
   [ "MK_CONFIG_ERR=''",
     "MK_NAME=\(.project.name | @sh)",
@@ -41,6 +48,11 @@ else
     "MK_GRAPH_MAX_BEHIND=\((.graph.maxCommitsBehind // 20) | floor | tostring | @sh)",
     "MK_GRAPH_REFRESH_SCRIPT=\((.graph.refreshScript // "") | @sh)",
     "MK_CAREFUL_PATTERNS_JSON=\((.careful.patterns // []) | tojson | @sh)",
+    "MK_SCRATCH_AGENT_MAX_MB=\((.scratch.agentMaxMB // 1024) | floor | tostring | @sh)",
+    "MK_SCRATCH_STALE_HOURS=\((.scratch.staleAfterHours // 24) | floor | tostring | @sh)",
+    "MK_SCRATCH_REPORT_MIN_MB=\((.scratch.reportMinMB // 500) | floor | tostring | @sh)",
+    "MK_DISK_MIN_FREE_GB=\((.disk.minFreeGB // 30) | floor | tostring | @sh)",
+    "MK_DISK_DROP_WARN_GB=\((.disk.dropWarnGB // 10) | floor | tostring | @sh)",
     "MK_CONFIG_WARN=\([keys[] | select(. as $k | known | index($k) | not)] | join(",") | @sh)"
   ] | join("\n")
 end

@@ -151,6 +151,25 @@
         }
       }
     },
+    "scratch": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Temp-space hygiene for agent scratch directories.",
+      "properties": {
+        "agentMaxMB": { "type": "integer", "minimum": 1, "default": 1024, "description": "New scratchpad files (MB) a subagent may leave behind; at or above it the SubagentStop gate blocks the subagent from returning." },
+        "staleAfterHours": { "type": "integer", "minimum": 1, "default": 24, "description": "Hours after which scratch data counts as stale." },
+        "reportMinMB": { "type": "integer", "minimum": 0, "default": 500, "description": "Minimum total scratch size (MB) worth reporting." }
+      }
+    },
+    "disk": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Free-disk-space guard.",
+      "properties": {
+        "minFreeGB": { "type": "integer", "minimum": 0, "default": 30, "description": "Free space (GB) below which memokit warns." },
+        "dropWarnGB": { "type": "integer", "minimum": 1, "default": 10, "description": "Free-space drop (GB) during a single Bash command that triggers a warning." }
+      }
+    },
     "careful": {
       "type": "object",
       "description": "Destructive-command guard. Project patterns are added to the builtin set; they can only add, never remove.",

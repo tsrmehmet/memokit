@@ -19,6 +19,7 @@ Read `.claude/memokit/reviewer.md` if it exists (project checks: locked decision
 4. **Measure, don't assume** (WORKING-MODEL.md §3). Verify against the actual files and `git diff`. If you did not read a file, make no claims about it.
 5. Talk in the project language from `.claude/memokit.json` when you address the user; your report to the orchestrator may be English.
 6. **Red before green (bugfix slices).** A bugfix slice without the regression test's red output from before the fix — failing for the bug's reason — is a REJECT.
+7. **Temp space (WORKING-MODEL.md §7).** Never `cp -R` a repo dir; use one `<scratchpad>/reviewer-<slice>/` dir, delete it with a literal-path `rm -rf` before returning, and end your report with `temp left: <size>`. A mutation test copies once (§7 recipe), then mutates and restores a file — never one full copy per mutation.
 
 ## How you report
 - First line: `Okunan ek dosya:` / `Overlay read:` path or `none (not present)`.

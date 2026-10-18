@@ -16,6 +16,8 @@ This is personal infrastructure shared as-is. MIT licensed, no support guarantee
 | Hook | `check-state-stale.sh` | Stop: warns when guarded dirs changed but `docs/STATE.md` did not. |
 | Hook | `check-context-budget.sh` | Stop: when the context passes the budget, tells the AI to hand off on its own. |
 | Hook | `check-subagent-background.sh` | SubagentStop: stops a subagent from returning while background work it started is still running. |
+| Hook | `check-subagent-scratch.sh` | SubagentStop: blocks (up to 3 times) a subagent that leaves a large temp footprint in the session scratchpad, so it cleans up before returning. |
+| Hook | `check-disk.sh` | PreToolUse/PostToolUse/PostToolUseFailure (Bash) and Stop: warns when one command drops free disk space by `disk.dropWarnGB`, warns when free space is below `disk.minFreeGB`, and at Stop points to `/memokit:sweep`. |
 | Hook | `precompact-handoff.sh` | PreCompact: steers the compaction summary toward what a handoff needs. |
 | Agent | `memokit:coder` | Writes production code and tests, one slice at a time, test-first. |
 | Agent | `memokit:reviewer` | Adversarial review of each coder slice. |
@@ -23,6 +25,7 @@ This is personal infrastructure shared as-is. MIT licensed, no support guarantee
 | Skill | `/memokit:handoff` | Writes the handoff and verifies it by measurement. |
 | Skill | `/memokit:resume` | Picks up from `docs/STATE.md` in a new session. |
 | Skill | `/memokit:triage` | Clusters red/flaky tests by signature, classifies them with evidence, then drives one root cause to a red-before-green fix. |
+| Skill | `/memokit:sweep` | Measures the stale temp leftovers earlier sessions left behind, asks, deletes the approved ones one literal `rm -rf` at a time and reports the freed space. |
 | Doc | `WORKING-MODEL.md` | The shared rules the hooks, agents and skills refer to. |
 
 ## Install
@@ -77,6 +80,11 @@ Requirements: bash, jq, git; macOS or Linux.
 | `graph.root` | no | none | Enables the code graph (see below): repo-relative directory the graph covers (`.` = whole repo). |
 | `graph.maxCommitsBehind` | no | `20` | Commits under `graph.root` since the last refresh before the codebase-question hint says "refresh first". |
 | `graph.refreshScript` | no | none | Repo-relative script that replaces the builtin refresh (run from the repo root; exit 0 = refreshed). |
+| `scratch.agentMaxMB` | no | `1024` | New data (MB) a subagent may leave in the scratchpad before the SubagentStop gate blocks it. |
+| `scratch.staleAfterHours` | no | `24` | Age after which a temp entry of an earlier session counts as stale. |
+| `scratch.reportMinMB` | no | `500` | Stale temp size (MB) from which SessionStart reports leftovers. |
+| `disk.minFreeGB` | no | `30` | Free-space floor (GB) that triggers the low-disk warning; `0` turns it off. |
+| `disk.dropWarnGB` | no | `10` | Free-space drop (GB) during one Bash command that triggers a warning. |
 | `careful.patterns[]` | no | `[]` | `{ "match": "<ERE>", "label": "<name>" }` destructive-command patterns added to the builtin set (case-insensitive, whole command). |
 
 ## Code graph (graphify)
@@ -139,12 +147,22 @@ Hooks read these from their environment, so set them in `.claude/settings.local.
 | `MEMOKIT_SUBAGENT_BG_OFF=1` | Disables the subagent background-work gate, so subagents can return while their background tasks still run. |
 | `MEMOKIT_CONTEXT_OFF=1` | Disables the context-budget reminder. |
 | `MEMOKIT_CAREFUL_OFF=1` | Disables the destructive-command guard. (`MEMOKIT_GUARD_OFF=1` disables it too.) |
+| `MEMOKIT_SCRATCH_OFF=1` | Disables the subagent temp-footprint gate, and the SessionStart temp-leftover line and its cached total. |
+| `MEMOKIT_DISK_OFF=1` | Disables the disk watch (drop warning, free-space floor, Stop message). |
+| `MEMOKIT_TEMP_ROOT=<dir>` | Testing override of the temp root memokit inspects; for tests, do not set it in a real session. |
 | `MEMOKIT_NO_INIT_HINT=1` | Silences the "run `/memokit:init`" hint. Without it the hint is added on every SessionStart (startup, resume, clear, compact) in a git work tree that has no `.claude/memokit.json` and no legacy `.claude/hooks/`. |
 | `MEMOKIT_HOOK_DEBUG=1` | Each hook dumps the payload it received to `$TMPDIR/memokit-<hash>-hook-<name>.json` (`/tmp` if `TMPDIR` is unset). |
 
 Troubleshooting:
 - **Guards deny everything:** `jq` is missing or `.claude/memokit.json` is invalid. The guards fail closed, so the session cannot repair the config itself. Install jq, or fix `.claude/memokit.json` by hand (or set `MEMOKIT_GUARD_OFF=1` in `.claude/settings.local.json` `env` and start a new session to fix it there); the denial message names the cause.
 - **No hooks fire:** the project has no `.claude/memokit.json`, or the plugin is disabled in `settings.json`.
+
+## Temp space
+
+Agents leave scratch copies behind and a full disk stops everything. `WORKING-MODEL.md` §7 gives the rules (copy only tracked and untracked-not-ignored files, one dedicated scratchpad directory per task, delete it before returning, end every report with `temp left: <size>`). Three things enforce them:
+- a SubagentStop gate blocks a subagent that leaves `scratch.agentMaxMB` or more of new files in the scratchpad (`MEMOKIT_SCRATCH_OFF=1` disables it);
+- a disk watch warns when one command eats `disk.dropWarnGB` or free space is below `disk.minFreeGB`, and SessionStart reports stale leftovers of at least `scratch.reportMinMB` and low disk (`MEMOKIT_DISK_OFF=1` disables the watch);
+- `/memokit:sweep` measures stale leftovers, asks, and deletes the approved ones. The destructive-command guard lets a single simple `rm -rf` of a literal direct child of the current session scratchpad, or of a whole stale sibling temp entry, through without an approval code; every other recursive `rm` still needs one.
 
 ## Migrating from per-repo hooks
 

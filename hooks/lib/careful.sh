@@ -10,8 +10,15 @@
 # and newlines) and are case-sensitive (-D is not -d). SQL and project
 # patterns run on the whole text, case-insensitive, because a heredoc body
 # spans several lines.
+#
+# Recursive rm is also exempt inside the current session's temp scratchpad
+# and for a whole stale sibling temp entry (lib/temp.sh, mk_temp_rm_safe),
+# but only when the whole command is one simple rm (mk_careful_single_rm)
+# and the caller ran mk_temp_init (guard-destructive.sh does).
 
 MK_CF_SAFE_RM="node_modules bin obj dist build .next coverage TestResults"
+# Set (as a local) only by mk_careful_labels; see _mk_cf_rm.
+_MK_CF_TEMP_OK=0
 
 # _mk_cf_has ERE TEXT -- case-sensitive ERE test, quiet on a bad regex.
 _mk_cf_has() { printf '%s' "$2" | grep -Eq -- "$1" 2>/dev/null; }
@@ -38,8 +45,9 @@ _mk_cf_rule() {
 }
 
 # _mk_cf_rm SEGMENT -- recursive rm with at least one target outside the
-# build-artifact safelist, or with no target at all. Parsing starts after the
-# FIRST token that is the rm command (rm, /bin/rm; not "git rm").
+# build-artifact safelist (and, see mk_careful_labels, the temp exemption),
+# or with no target at all. Parsing starts after the FIRST token that is the
+# rm command (rm, /bin/rm; not "git rm").
 _mk_cf_rm() {
   local t u raw base prev="" started=0 skip=0 recursive=0 targets=0 unsafe=0 _f
   local re_gitrm='git[[:space:]]+rm[[:space:]]'
@@ -79,7 +87,16 @@ _mk_cf_rm() {
     esac
     targets=$((targets + 1))
     base="${t%/}"; base="${base##*/}"
-    case " $MK_CF_SAFE_RM " in *" $base "*) ;; *) unsafe=1 ;; esac
+    case " $MK_CF_SAFE_RM " in
+      *" $base "*) ;;
+      *)
+        # Temp exemption (lib/temp.sh): only when mk_careful_labels has seen
+        # that the whole command is one simple rm (_MK_CF_TEMP_OK, local
+        # there) and mk_temp_init found this session's temp tree. Subshell:
+        # its entry listing needs globbing, which is off here.
+        if [ "${_MK_CF_TEMP_OK:-0}" = 1 ] && [ -n "${MK_TEMP_PROJECT_DIR:-}" ] &&
+           ( set +f; mk_temp_rm_safe "$t" ); then :; else unsafe=1; fi ;;
+    esac
   done
   [ "$_f" = 1 ] || set +f
   # Fail closed: a recursive rm we could not tokenize as a command still counts.
@@ -188,11 +205,82 @@ mk_careful_project() {
   done
 }
 
+# mk_careful_single_rm CMD -- 0 only when CMD, after joining backslash-newline
+# continuations, is exactly ONE simple rm invocation: "rm" (or /bin/rm,
+# /usr/bin/rm) as the first word, then options, then targets that are bare
+# words or wrapped whole in one pair of quotes. No other command, separator,
+# grouping, substitution, redirection, expansion ($ ` ~ { }), escape,
+# comment, assignment or wrapper (env, sudo, xargs, ...). Fail closed: any
+# shape it does not recognise is "not single". This is the caller guarantee
+# mk_temp_rm_safe needs: it judges the filesystem at check time only, so no
+# other command in the same Bash call may create, remove or swap a path first.
+mk_careful_single_rm() {
+  local c="$1" nl t first=1 targets=0 dd=0 inner _f rc=0
+  nl='
+'
+  # A continuation inside single quotes stays literal in bash, while the join
+  # below would remove it: refuse that combination.
+  case "$c" in *"\\$nl"*) case "$c" in *\'*) return 1 ;; esac ;; esac
+  c="${c//\\$nl/}"
+  while :; do case "$c" in *"$nl") c="${c%"$nl"}" ;; *) break ;; esac; done
+  # Whitelist, spelled out (ranges are locale-dependent in bash patterns):
+  # the target characters lib/temp.sh accepts, plus blank, tab and quotes.
+  # Excluded among others: newline ; & | < > ( ) { } $ ` \ # ~ ^ = !
+  # The executing shell may be zsh with the user's setopts, so this is judged
+  # against zsh syntax under any option: ^ # ~ <a-b> ( ) **/ (EXTENDED_GLOB,
+  # GLOB_STAR_SHORT), = (EQUALS: a word "=cmd" becomes the path of cmd;
+  # MAGIC_EQUAL_SUBST: "x==cmd" becomes "x=/path/of/cmd") and ! (history
+  # expansion in an interactive shell, bash or zsh) must all stay excluded
+  # (no "/" may follow the scratchpad name, and lib/temp.sh rejects "**"
+  # there). The rest stays inert under every option: @ + need "(" (KSH_GLOB),
+  # "," needs "{", ":" modifiers need "$", "(" or "!", "%" is no word
+  # expansion, and * ? only match within the scratchpad.
+  case "$c" in
+    *[!]ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/@+,:%*?[\"\'\ \	-]*) return 1 ;;
+  esac
+  case $- in *f*) _f=1 ;; *) _f=0 ;; esac
+  set -f
+  # shellcheck disable=SC2086  # word splitting is intended; globbing is off (set -f)
+  for t in $c; do
+    if [ "$first" -eq 1 ]; then
+      first=0
+      case "$t" in rm|/bin/rm|/usr/bin/rm) continue ;; *) rc=1; break ;; esac
+    fi
+    case "$t" in
+      -*)
+        # Options only before the first target and before "--": BSD rm takes
+        # a later "-x" as a file name, which _mk_cf_rm would skip as an option.
+        [ "$targets" -eq 0 ] && [ "$dd" -eq 0 ] || { rc=1; break; }
+        case "$t" in
+          --) dd=1; continue ;;
+          --recursive|--force|--verbose|--dir|--one-file-system) continue ;;
+          --*|-) rc=1; break ;;
+          *[!dfiIPRrvWx-]*|-*-*) rc=1; break ;;
+        esac
+        continue ;;
+    esac
+    case "$t" in
+      \"*\") inner="${t#\"}"; inner="${inner%\"}" ;;
+      \'*\') inner="${t#\'}"; inner="${inner%\'}" ;;
+      *) inner="$t" ;;
+    esac
+    case "$inner" in ''|-*|*[\"\']*) rc=1; break ;; esac
+    targets=$((targets + 1))
+  done
+  [ "$_f" = 1 ] || set +f
+  [ "$rc" -eq 0 ] && [ "$first" -eq 0 ] && [ "$targets" -gt 0 ]
+}
+
 # mk_careful_labels CMD -- builtin + project labels, de-duplicated, in order.
 mk_careful_labels() {
-  local joined stripped
+  local joined stripped _MK_CF_TEMP_OK=0
   joined="$(mk_careful_join "$1")"
   stripped="$(mk_careful_strip "$1")"
+  # Seen by _mk_cf_rm through dynamic scope; never set anywhere else.
+  if [ -n "${MK_TEMP_PROJECT_DIR:-}" ] && [ "$joined" = "$stripped" ] &&
+     mk_careful_single_rm "$1"; then
+    _MK_CF_TEMP_OK=1
+  fi
   {
     mk_careful_builtin "$joined"; mk_careful_project "$joined"
     if [ "$stripped" != "$joined" ]; then

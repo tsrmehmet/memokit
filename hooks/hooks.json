@@ -14,15 +14,27 @@
       { "matcher": "Bash|Agent|Task|SendMessage",
         "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/guard-subagent-authority.sh\"", "timeout": 5 } ] },
       { "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
-        "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/guard-destructive.sh\"", "timeout": 5 } ] }
+        "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/guard-destructive.sh\"", "timeout": 5 } ] },
+      { "matcher": "Bash",
+        "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-disk.sh\"", "timeout": 5 } ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Bash",
+        "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-disk.sh\"", "timeout": 5 } ] }
+    ],
+    "PostToolUseFailure": [
+      { "matcher": "Bash",
+        "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-disk.sh\"", "timeout": 5 } ] }
     ],
     "Stop": [
       { "hooks": [
           { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-state-stale.sh\"", "timeout": 8 },
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-context-budget.sh\"", "timeout": 8 } ] }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-context-budget.sh\"", "timeout": 8 },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-disk.sh\"", "timeout": 10 } ] }
     ],
     "SubagentStop": [
-      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-subagent-background.sh\"", "timeout": 5 } ] }
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-subagent-background.sh\"", "timeout": 5 } ] },
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-subagent-scratch.sh\"", "timeout": 10 } ] }
     ],
     "PreCompact": [
       { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/precompact-handoff.sh\"", "timeout": 5 } ] }

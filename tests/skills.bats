@@ -4,6 +4,7 @@ load helpers
   grep -q '^name: handoff$' "$MK_REPO/skills/handoff/SKILL.md"
   grep -q '^name: resume$'  "$MK_REPO/skills/resume/SKILL.md"
   grep -q '^name: triage$' "$MK_REPO/skills/triage/SKILL.md"
+  grep -q '^name: sweep$' "$MK_REPO/skills/sweep/SKILL.md"
 }
 @test "handoff verifies by measuring and uses the exact closing phrase" {
   f="$MK_REPO/skills/handoff/SKILL.md"
@@ -95,4 +96,103 @@ line_of() { grep -nF -- "$2" "$1" | head -n1 | cut -d: -f1; }
   grep -qF 'graphify' "$f"
   grep -qF 'memokit-graph.sh" refresh' "$f"
   grep -qF '.graphifyignore' "$f"
+}
+
+@test "sweep is gated: description prefix and step 0 first" {
+  f="$MK_REPO/skills/sweep/SKILL.md"
+  sed -n '/^---$/,/^---$/p' "$f" | grep -qF "description: $GATE_DESC"
+  g="$(grep -nF "$GATE_STEP" "$f" | head -n1 | cut -d: -f1)"
+  n="$(grep -nE '^1\. ' "$f" | head -n1 | cut -d: -f1)"
+  [ -n "$g" ] && [ "$g" -lt "$n" ]
+}
+@test "sweep asks in section 2 format and deletes literal paths only" {
+  f="$MK_REPO/skills/sweep/SKILL.md"
+  for s in 'AskUserQuestion' 'WORKING-MODEL.md §2' 'rm -rf <literal absolute path' 'one-way door' \
+           'all stale' 'pick' 'its OWN Bash call' 'df -h' 'du -sk' \
+           'CLAUDE_PLUGIN_ROOT}/skills/sweep/scripts/memokit-temp.sh'; do
+    grep -qF -- "$s" "$f" || { echo "missing: $s"; false; }
+  done
+  grep -qE '^- Delete the current session' "$f"
+  grep -qE '^- Delete anything outside this project' "$f"
+  grep -qF 'never `&&`, `;`, pipes, loops, variables' "$f"
+}
+sweep_run() {
+  run env MEMOKIT_SESSION_ID="$TT_SID" MEMOKIT_TRANSCRIPT_PATH="$TT_TDIR/$TT_SID.jsonl" \
+    "$MK_BASH" -c 'cd "$1" && shift && "$@"' x "$PROJ" "$MK_REPO/skills/sweep/scripts/memokit-temp.sh" "$@"
+}
+@test "memokit-temp.sh list classifies stale/active against a fixture tree" {
+  mk_project; mk_temp_tree
+  OLD=00000001-aaaa-bbbb-cccc-000000000001; NEW=00000002-aaaa-bbbb-cccc-000000000002
+  mk_blob "$TT_SESS/scratchpad/mine" 50
+  mk_blob "$TT_PROJ/$OLD/scratchpad/big" 300
+  mk_blob "$TT_PROJ/$NEW/scratchpad/f" 20
+  mkdir -p "$TT_PROJ/empty/sub"; mk_blob "$TT_PROJ/loose/x" 10
+  : > "$TT_TDIR/$OLD.jsonl"; touch -t 202001010000 "$TT_TDIR/$OLD.jsonl"
+  : > "$TT_TDIR/$NEW.jsonl"
+  sweep_run list
+  [ "$status" -eq 0 ]
+  echo "$output"
+  printf '%s\n' "$output" | head -n1 | grep -Eq "^stale	[0-9]+	[0-9]+ KB	(2019-12-31|2020-01-01)T[0-9:]+Z	$TT_PROJ/$OLD$"
+  printf '%s\n' "$output" | grep -q "^active	[0-9]*	[0-9]* KB	.*	$TT_PROJ/$NEW$"
+  printf '%s\n' "$output" | grep -q "^active	[0-9]*	[0-9]* KB	.*	$TT_PROJ/loose$"
+  ! printf '%s\n' "$output" | grep -q "$TT_SID"
+  ! printf '%s\n' "$output" | grep -q "empty"
+  rm -rf "$TROOT" "$PROJ"
+}
+@test "memokit-temp.sh list hides control characters and marks the row manual" {
+  mk_project; mk_temp_tree
+  mk_blob "$TT_PROJ/$(printf 'a\nb')/f" 5
+  sweep_run list
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" -eq 1 ]
+  printf '%s\n' "$output" | grep -q "^manual	[0-9]*	[0-9]* KB	.*	$TT_PROJ/a?b$"
+  rm -rf "$TROOT" "$PROJ"
+}
+@test "memokit-temp.sh free prints a size and refuses without config" {
+  mk_project; mk_temp_tree
+  sweep_run free
+  [ "$status" -eq 0 ]; printf '%s' "$output" | grep -Eq '^[0-9]+ MB$|^[0-9.]+ GB$'
+  rm -f "$PROJ/.claude/memokit.json"
+  sweep_run list
+  [ "$status" -eq 2 ]
+  rm -rf "$TROOT" "$PROJ"
+}
+@test "memokit-temp.sh marks names the guard would reject as manual, never stale" {
+  mk_project; mk_temp_tree
+  mk_blob "$TT_PROJ/a b/f" 5; mk_blob "$TT_PROJ/c[1]/f" 5; mk_blob "$TT_PROJ/ok.d/f" 5
+  touch -t 202001010000 "$TT_PROJ/a b" "$TT_PROJ/c[1]" "$TT_PROJ/ok.d"
+  sweep_run list
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q "^manual	.*	$TT_PROJ/a b$"
+  printf '%s\n' "$output" | grep -qF "$TT_PROJ/c[1]"
+  ! printf '%s\n' "$output" | grep '^stale' | grep -qE 'a b|c\['
+  rm -rf "$TROOT" "$PROJ"
+}
+@test "memokit-temp.sh falls back to the newest transcript, from a subdirectory too" {
+  mk_project; mk_temp_tree
+  FH="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkhome.XXXXXX")"
+  slug="$(printf '%s' "$PROJ" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
+  mkdir -p "$FH/projects/$slug" "$PROJ/src/deep" "$TROOT/claude-$TT_UID/$slug"
+  A=00000001-aaaa-bbbb-cccc-000000000001; B=00000002-aaaa-bbbb-cccc-000000000002
+  : > "$FH/projects/$slug/$A.jsonl"; touch -t 202001010000 "$FH/projects/$slug/$A.jsonl"
+  : > "$FH/projects/$slug/$B.jsonl"
+  mk_blob "$TROOT/claude-$TT_UID/$slug/$A/f" 30; mk_blob "$TROOT/claude-$TT_UID/$slug/$B/f" 30
+  run env -u MEMOKIT_SESSION_ID -u MEMOKIT_TRANSCRIPT_PATH CLAUDE_CONFIG_DIR="$FH" \
+    "$MK_BASH" -c 'cd "$1" && "$2" list' x "$PROJ/src/deep" "$MK_REPO/skills/sweep/scripts/memokit-temp.sh"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q "^stale	.*	$TROOT/claude-$TT_UID/$slug/$A$"
+  ! printf '%s\n' "$output" | grep -qF "$B"
+  rm -rf "$TROOT" "$PROJ" "$FH"
+}
+@test "memokit-temp.sh marks non-ASCII names manual under a UTF-8 locale" {
+  loc="$(locale -a 2>/dev/null | grep -iE '\.utf-?8$' | head -n1)"
+  [ -n "$loc" ] || skip "no UTF-8 locale installed"
+  mk_project; mk_temp_tree
+  mk_blob "$TT_PROJ/caf$(printf '\303\251')/f" 5; mk_blob "$TT_PROJ/$(printf '\304\260')x/f" 5
+  touch -t 202001010000 "$TT_PROJ/caf$(printf '\303\251')" "$TT_PROJ/$(printf '\304\260')x"
+  LC_ALL="$loc" sweep_run list
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c '^manual')" -eq 2 ]
+  ! printf '%s\n' "$output" | grep -q '^stale'
+  rm -rf "$TROOT" "$PROJ"
 }

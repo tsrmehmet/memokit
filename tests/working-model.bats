@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 load helpers
 @test "sections referenced by hooks exist" {
-  for s in '## §1' '## §2' '## §3' '## §4' '## §5' '## §6'; do grep -q "^$s" "$MK_REPO/WORKING-MODEL.md"; done
+  for s in '## §1' '## §2' '## §3' '## §4' '## §5' '## §6' '## §7'; do grep -q "^$s" "$MK_REPO/WORKING-MODEL.md"; done
 }
 @test "session start injects the working model" {
   mk_project; run_hook session-start.sh '{}'; ctx | grep -q 'Measure, don'"'"'t assume'
@@ -20,4 +20,8 @@ load helpers
 }
 @test "rule block points at the §2 format in both languages" {
   for l in en tr; do grep '^MK_T_IR_RULES_BASE=' "$HOOKS/messages/$l.sh" | grep -qF 'WORKING-MODEL.md §2' || { echo "$l"; false; }; done
+}
+@test "§7 exists and the rule block cites it in both languages" {
+  grep -q '^## §7' "$MK_REPO/WORKING-MODEL.md"
+  for l in en tr; do grep '^MK_T_IR_RULES_BASE=' "$HOOKS/messages/$l.sh" | grep -qF 'WORKING-MODEL.md §7' || { echo "$l"; false; }; done
 }

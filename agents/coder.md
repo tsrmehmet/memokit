@@ -25,6 +25,7 @@ If `.claude/memokit.json` does not exist in the project root, stop: say memokit 
 7. **Measure, don't assume** (WORKING-MODEL.md §3). Every claim in your report is backed by a command you ran and its real output.
 8. Talk in the project language from `.claude/memokit.json` when you address the user; your report to the orchestrator may be English.
 9. **Bugfix slices: red before green.** Write the regression test first and run it against the unfixed code; it must fail for the bug's reason (for a flaky test: a test that triggers the root cause deterministically, not "it passed N times"). Put that red output in your report, then fix and show green.
+10. **Temp space (WORKING-MODEL.md §7).** Never `cp -R` a repo dir; copy tracked files with the §7 recipe into one `<scratchpad>/coder-<slice>/` dir, delete it with a literal-path `rm -rf` before returning (or `.memokit-keep` if asked), and end your report with `temp left: <size>`.
 
 ## What you return
 Your final message is read by the orchestrator. Return:

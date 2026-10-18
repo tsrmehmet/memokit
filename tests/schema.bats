@@ -7,7 +7,7 @@ load helpers
 }
 @test "schema lists exactly the known keys" {
   run jq -r '.properties | keys | join(",")' "$MK_REPO/schema/memokit.schema.json"
-  [ "$output" = '$schema,careful,contextBudget,graph,guardedDirs,hints,language,project,sessionStart,stateStale,version' ]
+  [ "$output" = '$schema,careful,contextBudget,disk,graph,guardedDirs,hints,language,project,scratch,sessionStart,stateStale,version' ]
 }
 @test "example enables the code graph" {
   jq -e '.graph.root == "src"' "$MK_REPO/examples/memokit.json"

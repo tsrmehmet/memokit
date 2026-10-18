@@ -40,3 +40,15 @@ Project files in `.claude/memokit/` (`rules.md`, `coder.md`, `reviewer.md`, `han
 
 ## §6 Language
 Talk to the user in the project's `language` from `.claude/memokit.json`.
+
+## §7 Temp space and disk
+- Never `cp -R` / `cp -r` a repo dir (ignored build output can be GBs). Copy tracked + untracked-not-ignored files only; set `REPO` and `DEST`, and replace `<paths>` with the literal relative paths to copy (space-separated, no spaces or globs inside one; `.` for all; never a variable: zsh does not word-split `$VAR`, so a multi-path variable silently copies nothing). `DEST` is the dedicated `<scratchpad>/<role>-<slice>` dir below, created first with `mkdir -p`. A path with no files copies nothing and still exits 0 (BSD and GNU tar):
+```
+git -C "$REPO" ls-files -z -co --exclude-standard -- <paths> | (cd "$REPO" && xargs -0 sh -c 'for f; do { [ -e "$f" ] || [ -L "$f" ]; } && printf "%s\0" "$f"; done' sh) | (cd "$REPO" && tar --null -T - -cf -) | tar -xf - -C "$DEST"
+```
+- Work in ONE dedicated direct child of the scratchpad per task: `<scratchpad>/<role>-<slice>/` (name chars `A-Za-z0-9._@+,:%-`). Never write loose files into the scratchpad root.
+- Before returning, delete it with its own Bash call and a literal absolute path: `rm -rf <scratchpad>/<role>-<slice>` — repeat the expanded absolute path, never `$DEST` or any variable, no quotes, no trailing slash, no `&&`, `;`, pipes or `$(…)` (anything else needs the user's approval code).
+- If the orchestrator asked you to keep it, put an empty `.memokit-keep` file in it and list the path in your report.
+- Every report ends with `temp left: <size>` (e.g. `temp left: 0`).
+- Mutation testing: copy once, then mutate and restore a file in that copy; never one full copy per mutation.
+- Why: a SubagentStop gate blocks a subagent that leaves ≥ `scratch.agentMaxMB` (default 1024) of new files in the scratchpad; a disk watch warns when one command eats ≥ `disk.dropWarnGB` (10) or free space is below `disk.minFreeGB` (30).

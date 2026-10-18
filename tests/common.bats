@@ -161,3 +161,31 @@ lib() { "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; $1"; }
     [ "$output" = "graph" ] || { echo "accepted: $g -> $output"; false; }
   done
 }
+
+@test "scratch/disk defaults when absent" {
+  mk_project '{"version":1,"project":{"name":"Demo","tag":"DMO"}}'
+  run lib 'mk_resolve_root "{}"; mk_load_config; printf "%s|%s|%s|%s|%s" "$MK_SCRATCH_AGENT_MAX_MB" "$MK_SCRATCH_STALE_HOURS" "$MK_SCRATCH_REPORT_MIN_MB" "$MK_DISK_MIN_FREE_GB" "$MK_DISK_DROP_WARN_GB"'
+  [ "$output" = "1024|24|500|30|10" ]
+}
+
+@test "scratch/disk values are read" {
+  mk_project '{"version":1,"project":{"name":"D","tag":"DMO"},"scratch":{"agentMaxMB":5,"staleAfterHours":2,"reportMinMB":0},"disk":{"minFreeGB":0,"dropWarnGB":3}}'
+  run lib 'mk_resolve_root "{}"; mk_load_config; printf "%s|%s|%s|%s|%s" "$MK_SCRATCH_AGENT_MAX_MB" "$MK_SCRATCH_STALE_HOURS" "$MK_SCRATCH_REPORT_MIN_MB" "$MK_DISK_MIN_FREE_GB" "$MK_DISK_DROP_WARN_GB"'
+  [ "$output" = "5|2|0|0|3" ]
+}
+
+@test "scratch/disk invalid values are rejected" {
+  for c in 'scratch|{"agentMaxMB":0}' 'scratch|{"staleAfterHours":0}' 'scratch|{"reportMinMB":-1}' \
+           'disk|{"minFreeGB":-1}' 'disk|{"dropWarnGB":0}' 'scratch|"x"' 'disk|[]'; do
+    k="${c%%|*}"; v="${c#*|}"
+    mk_project "{\"version\":1,\"project\":{\"name\":\"D\",\"tag\":\"DMO\"},\"$k\":$v}"
+    run lib 'mk_resolve_root "{}"; mk_load_config; echo "$MK_CONFIG_ERR"'
+    [ "$output" = "$k" ] || { echo "accepted: $c -> $output"; false; }
+  done
+}
+
+@test "scratch/disk are known keys" {
+  mk_project '{"version":1,"project":{"name":"D","tag":"DMO"},"scratch":{},"disk":{}}'
+  run lib 'mk_resolve_root "{}"; mk_load_config; printf "[%s]" "$MK_CONFIG_WARN"'
+  [ "$output" = "[]" ]
+}

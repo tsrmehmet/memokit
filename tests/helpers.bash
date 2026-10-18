@@ -66,3 +66,35 @@ path_without() {
   done
   printf '%s' "$bin"
 }
+
+# Temp-tree fixture for hooks/lib/temp.sh. Builds
+#   $TROOT/claude-<uid>/<slug>/<sid>/{scratchpad,tasks}   (Claude Code's temp tree)
+#   $TROOT/projects/<slug>/<sid>.jsonl                    (the transcript dir)
+# and exports MEMOKIT_TEMP_ROOT (the logical, as-created spelling of
+# $TROOT/claude-<uid>) plus TT_* paths in their physical (cd -P) form and
+# TT_PAYLOAD, a hook payload pointing at that session.
+mk_temp_tree() {
+  TROOT_LOGICAL="$(mktemp -d "${BATS_TMPDIR:-/tmp}/troot.XXXXXX")"
+  TROOT="$(cd -P "$TROOT_LOGICAL" && pwd -P)"
+  TT_UID="$(id -u)"
+  TT_SLUG="${1:--fix-proj}"
+  TT_SID="${2:-11111111-2222-3333-4444-555555555555}"
+  TT_ROOT="$TROOT/claude-$TT_UID"
+  TT_PROJ="$TT_ROOT/$TT_SLUG"
+  TT_SESS="$TT_PROJ/$TT_SID"
+  TT_SP="$TT_SESS/scratchpad"
+  TT_TDIR="$TROOT/projects/$TT_SLUG"
+  mkdir -p "$TT_SP" "$TT_SESS/tasks" "$TT_TDIR"
+  # mk_temp_init wants owned, not group/world-writable dirs; do not rely on umask.
+  chmod 700 "$TT_ROOT" "$TT_PROJ" "$TT_SESS" "$TT_SP"
+  : > "$TT_TDIR/$TT_SID.jsonl"
+  TT_PAYLOAD="$(jq -nc --arg t "$TT_TDIR/$TT_SID.jsonl" --arg s "$TT_SID" '{session_id:$s,transcript_path:$t,cwd:"/x"}')"
+  MEMOKIT_TEMP_ROOT="$TROOT_LOGICAL/claude-$TT_UID"
+  export MEMOKIT_TEMP_ROOT TROOT TROOT_LOGICAL TT_UID TT_SLUG TT_SID TT_ROOT TT_PROJ TT_SESS TT_SP TT_TDIR TT_PAYLOAD
+}
+
+# mk_blob PATH KB -- a file of KB kilobytes (parent dirs created).
+mk_blob() {
+  mkdir -p "$(dirname "$1")"
+  dd if=/dev/zero of="$1" bs=1024 count="$2" 2>/dev/null
+}

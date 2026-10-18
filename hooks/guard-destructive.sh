@@ -82,13 +82,31 @@ case "$tool" in
   *) exit 0 ;;
 esac
 
-if ! cmd="$(printf '%s' "$PAYLOAD" | jq -r '.tool_input.command // empty' 2>/dev/null)"; then
+# jq -r prints a \u0000 in the command as a raw NUL, which $(...) drops: the
+# text checked would differ from the command run. One jq call flags it ("N")
+# or returns the command behind a "Y" sentinel.
+if ! cmd="$(printf '%s' "$PAYLOAD" | jq -r '(.tool_input.command // "" | tostring) as $c
+    | if ($c | explode | any(. == 0)) then "N" else "Y" + $c end' 2>/dev/null)"; then
   deny "$(mk_msg CF_INVALID_JSON)"; exit 0
 fi
+case "$cmd" in
+  Y*) cmd="${cmd#Y}" ;;
+  N) deny "$(mk_msg CF_NUL)"; exit 0 ;;
+  *) deny "$(mk_msg CF_INVALID_JSON)"; exit 0 ;;
+esac
 [ -n "$cmd" ] || exit 0
 
 # shellcheck source-path=SCRIPTDIR source=lib/careful.sh
 . "$MK_LIB_DIR/careful.sh"
+# Recursive rm inside this session's scratchpad/ or of a whole stale sibling
+# temp entry needs no code (lib/temp.sh, mk_temp_rm_safe), but only for a
+# command that is one simple rm; the temp tree is located only then. When it
+# is not found (or the payload has no transcript_path), nothing changes.
+if mk_careful_single_rm "$cmd"; then
+  # shellcheck source-path=SCRIPTDIR source=lib/temp.sh
+  . "$MK_LIB_DIR/temp.sh"
+  mk_temp_init "$PAYLOAD" || true
+fi
 labels="$(mk_careful_labels "$cmd")"
 [ -n "$labels" ] || exit 0
 
