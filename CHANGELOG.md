@@ -2,6 +2,10 @@
 
 Every change to `hooks/`, `skills/`, `agents/` or `WORKING-MODEL.md` bumps `version` in `.claude-plugin/plugin.json` and adds an entry here (a pinned version means `/plugin update` delivers nothing otherwise).
 
+## 0.5.1 — 2026-10-18
+- Linux portability: the `human_kb` test no longer fails on hosts without the `tr_TR.UTF-8` locale (bash's setlocale warning leaked into the captured output); no awk/mawk difference was found in the 0.5.0 code.
+- shellcheck compatibility: `A && B || C` chains in `careful.sh` and `temp.sh` are explicit `if` statements, so older shellcheck releases (SC2015) pass.
+
 ## 0.5.0 — 2026-10-18
 - Subagent temp-footprint gate: new SubagentStop hook `check-subagent-scratch.sh` blocks (up to 3 times) a subagent that leaves `scratch.agentMaxMB` (default 1024) or more of new files in the session scratchpad. `MEMOKIT_SCRATCH_OFF=1` disables it.
 - Disk watch: new hook `check-disk.sh` (PreToolUse, PostToolUse and PostToolUseFailure on Bash, and Stop) warns when one command, failing or not, drops free space (min of the project and temp-root filesystems) by `disk.dropWarnGB` (10), warns below `disk.minFreeGB` (30; 0 = off), and at Stop points to `/memokit:sweep`. `MEMOKIT_DISK_OFF=1` disables it; SessionStart reports large temp leftovers (`scratch.reportMinMB`) and low disk.

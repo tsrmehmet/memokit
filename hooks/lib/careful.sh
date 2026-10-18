@@ -250,7 +250,7 @@ mk_careful_single_rm() {
       -*)
         # Options only before the first target and before "--": BSD rm takes
         # a later "-x" as a file name, which _mk_cf_rm would skip as an option.
-        [ "$targets" -eq 0 ] && [ "$dd" -eq 0 ] || { rc=1; break; }
+        if [ "$targets" -ne 0 ] || [ "$dd" -ne 0 ]; then rc=1; break; fi
         case "$t" in
           --) dd=1; continue ;;
           --recursive|--force|--verbose|--dir|--one-file-system) continue ;;

@@ -181,9 +181,9 @@ mk_temp_init() {
               "/private/tmp/claude-$uid" "/tmp/claude-$uid"; do
     [ -n "$cand" ] || continue
     root="$(CDPATH='' cd -P -- "$cand" 2>/dev/null && pwd -P)" || continue
-    [ -n "$root" ] && [ "$root" != "/" ] || continue
+    if [ -z "$root" ] || [ "$root" = "/" ]; then continue; fi
     _mk_temp_dir_ok "$root" || continue
-    [ -d "$root/$slug" ] && [ ! -L "$root/$slug" ] || continue
+    if [ ! -d "$root/$slug" ] || [ -L "$root/$slug" ]; then continue; fi
     _mk_temp_dir_ok "$root/$slug" || continue
     MK_TEMP_UID="$uid"
     MK_TEMP_ROOT_DIR="$root"
@@ -510,7 +510,7 @@ mk_disk_free_kb() {
     *) printf '%s' "$((10#$v))"; return 0 ;;
   esac
   for d in "${MK_ROOT:-}" "${MK_TEMP_ROOT_DIR:-}"; do
-    [ -n "$d" ] && [ -d "$d" ] || continue
+    if [ -z "$d" ] || [ ! -d "$d" ]; then continue; fi
     # Column 4 (Available). Located as the field before the first "NN%" one,
     # since a filesystem name may contain spaces ("map auto_home" on macOS).
     v="$(df -Pk "$d" 2>/dev/null | LC_ALL=C awk 'NR == 2 { for (i = 2; i <= NF; i++) if ($i ~ /^[0-9]+%$/) { print $(i - 1); exit } }')"

@@ -323,7 +323,7 @@ $TT_SID:n" ]
 
 @test "human_kb prints GB with one decimal and whole MB" {
   run "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; . '$HOOKS/lib/temp.sh'
-    LC_ALL=tr_TR.UTF-8 mk_human_kb 19922944; echo
+    { LC_ALL=tr_TR.UTF-8 mk_human_kb 19922944; } 2>/dev/null; echo
     mk_human_kb 524288; echo
     mk_human_kb 1048576; echo
     mk_human_kb 0; echo
