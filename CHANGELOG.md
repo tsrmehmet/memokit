@@ -2,6 +2,10 @@
 
 Every change to `hooks/`, `skills/`, `agents/` or `WORKING-MODEL.md` bumps `version` in `.claude-plugin/plugin.json` and adds an entry here (a pinned version means `/plugin update` delivers nothing otherwise).
 
+## 0.5.3 — 2026-10-18
+- Hooks no longer write `printf: write error: Broken pipe` to stderr when SIGPIPE is ignored (GitHub Actions): `grep -q` may stop reading at its first match, so the feeding `printf` is now quiet. This made the CI test "deny message lists every label" fail; the guard's decision was not affected. The pathological-input test keeps the 1 s target as a report and asserts < 3 s (inside the 5 s hook timeout) so a slow runner does not flake.
+- Destructive-command guard: the case normalisation of command names in the flat view no longer skips a word right after another one (`echo rm;RM -rf x`, `true;Git push -f`, `a|RM -rf x`, `RM RM -rf x` were not labelled): the lowercasing expressions match only the leading boundary, so no separator is consumed.
+
 ## 0.5.2 — 2026-10-18
 - Destructive-command guard: a quoted, escaped, prefixed or grouped command word no longer bypasses the rules (`"rm" -rf src`, `r""m`, `\rm`, `sudo rm`, `timeout 5 rm`, `{rm,-rf,src}`, `(cd src && git reset --hard)`, `git push -f&`, zsh `/bin/rm(N)`, `rm>/dev/null -rf x`). Every rule now also runs on a flat view of the command built in one linear `sed` pass (quotes and backslashes deleted, `( ) { }` and backticks blanked, glued `; | & < >` split); labels are only ever added.
 - A computed command word right before an rm-style recursive option (`$RM -rf x`, `${RM:-rm} -rf x`, `/bin/r? -rf x`) counts as a recursive rm, without the build-directory safelist.

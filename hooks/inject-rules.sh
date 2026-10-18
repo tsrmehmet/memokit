@@ -64,7 +64,8 @@ hint_on() { case " $MK_HINTS_BUILTIN " in *" $1 "*) return 0 ;; esac; return 1; 
 # just report "no match" via its exit status, with no diagnostic noise ever
 # reaching a caller that might merge stdout+stderr (this hook's own stdout,
 # read alone, is unaffected either way: the diagnostic never went there).
-matches() { printf '%s' "$prompt" | grep -qiE "$1" 2>/dev/null; }
+# printf 2>/dev/null: grep -q may close the pipe early (EPIPE when SIGPIPE is ignored).
+matches() { printf '%s' "$prompt" 2>/dev/null | grep -qiE "$1" 2>/dev/null; }
 HINTS=""
 if [ -n "$prompt" ]; then
   hint_on debugging && matches 'bug|hata|çalışmıyor|calismiyor|patlıyor|patliyor|kırmızı|kirmizi|broken|crash|exception|regres|neden böyle|neden boyle|fails?|failing|flaky|triyaj|triage|red tests?|e2e' \

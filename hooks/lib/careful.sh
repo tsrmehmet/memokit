@@ -55,7 +55,9 @@ _MK_CF_TEMP_OK=0
 # Fail closed: a grep error (exit > 1) counts as a match.
 _mk_cf_has() {
   local rc=0
-  printf '%s' "$2" | grep -Eq"${3:-}" -- "$1" 2>/dev/null || rc=$?
+  # grep -q may stop reading at its first match; with SIGPIPE ignored (as in
+  # CI runners) printf then reports a write error: not a failure, keep quiet.
+  printf '%s' "$2" 2>/dev/null | grep -Eq"${3:-}" -- "$1" 2>/dev/null || rc=$?
   [ "$rc" -ne 1 ]
 }
 
@@ -189,6 +191,10 @@ mk_careful_strip() {
 #   .exe dropped from a word        kubectl.exe delete  -> kubectl delete
 #   rm git kubectl helm docker      RM -rf x, Git push  -> rm -rf x, git push
 #     dotnet in any case -> lower   (not after $: $GIT stays a variable)
+#     Only the leading boundary is matched, so no separator is consumed and
+#     an adjacent word (echo rm;RM) is not skipped. A longer word's prefix
+#     is lowercased too (RMDIR -> rmDIR): harmless, as every rule needs the
+#     tool word followed by a non-word character.
 #   ; | -> blank-padded             x;git push -f|cat   -> x ; git push -f | cat
 #   blank before < > after a word   rm>/dev/null -rf x  -> rm >/dev/null -rf x
 #     (not after a digit, & < >:    2>&1 2>/dev/null &>f stay whole)
@@ -202,12 +208,12 @@ mk_careful_flat() {
 ' tok="mk-sentinel-$$-$RANDOM-$RANDOM"
   out="$(printf '%s\n%s\n' "$1" "$tok" | LC_ALL=C sed -E -e 's/["'\''\\]//g' -e 's/\$\{/$/g' -e 's/:-/ /g' \
     -e '/[{]/s/,/ /g' -e 's/[`(){}]/ /g' -e 's/\.[Ee][Xx][Ee]([^[:alnum:]_.-]|$)/\1/g' \
-    -e 's/(^|[^[:alnum:]_.$-])[Rr][Mm]([^[:alnum:]_.-]|$)/\1rm\2/g' \
-    -e 's/(^|[^[:alnum:]_.$-])[Gg][Ii][Tt]([^[:alnum:]_.-]|$)/\1git\2/g' \
-    -e 's/(^|[^[:alnum:]_.$-])[Kk][Uu][Bb][Ee][Cc][Tt][Ll]([^[:alnum:]_.-]|$)/\1kubectl\2/g' \
-    -e 's/(^|[^[:alnum:]_.$-])[Hh][Ee][Ll][Mm]([^[:alnum:]_.-]|$)/\1helm\2/g' \
-    -e 's/(^|[^[:alnum:]_.$-])[Dd][Oo][Cc][Kk][Ee][Rr]([^[:alnum:]_.-]|$)/\1docker\2/g' \
-    -e 's/(^|[^[:alnum:]_.$-])[Dd][Oo][Tt][Nn][Ee][Tt]([^[:alnum:]_.-]|$)/\1dotnet\2/g' \
+    -e 's/(^|[^[:alnum:]_.$-])[Rr][Mm]/\1rm/g' \
+    -e 's/(^|[^[:alnum:]_.$-])[Gg][Ii][Tt]/\1git/g' \
+    -e 's/(^|[^[:alnum:]_.$-])[Kk][Uu][Bb][Ee][Cc][Tt][Ll]/\1kubectl/g' \
+    -e 's/(^|[^[:alnum:]_.$-])[Hh][Ee][Ll][Mm]/\1helm/g' \
+    -e 's/(^|[^[:alnum:]_.$-])[Dd][Oo][Cc][Kk][Ee][Rr]/\1docker/g' \
+    -e 's/(^|[^[:alnum:]_.$-])[Dd][Oo][Tt][Nn][Ee][Tt]/\1dotnet/g' \
     -e 's/[;|]/ & /g' -e 's/([^0-9&<> ])([<>])/\1 \2/g' \
     -e 's/([^&<> ])&/\1 \&/g' -e 's/ &([^&>])/ \& \1/g')" || return 1
   case "$out" in *"$nl$tok") printf '%s' "${out%"$nl$tok"}" ;; *) return 1 ;; esac
@@ -309,7 +315,7 @@ mk_careful_project() {
   i=0
   while [ "$i" -lt "${n:-0}" ]; do
     re="$(_mk_cf_pattern "$i" match)" || { printf 'unparsed\n'; return 0; }
-    if printf '%s' "$1" | grep -Eiq -- "$re" 2>/dev/null; then
+    if printf '%s' "$1" 2>/dev/null | grep -Eiq -- "$re" 2>/dev/null; then
       lab="$(_mk_cf_pattern "$i" label)" || lab=unparsed
       printf '%s\n' "${lab:-unparsed}"
     fi

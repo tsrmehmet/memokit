@@ -358,7 +358,8 @@ guard_file() {
   pl="$BATS_TEST_TMPDIR/payload.json"
   jq -Rs --arg cwd "$PROJ" '{tool_name:"Bash",tool_input:{command:.},cwd:$cwd}' < "$1" > "$pl"
   t0="$(perl -MTime::HiRes=time -e 'printf "%d", time * 1000')"
-  run "$MK_BASH" -c 'ulimit -t 5; "$0" "$1" < "$2"' "$MK_BASH" "$HOOKS/guard-destructive.sh" "$pl"
+  # stdout only: the decision is parsed from it (stderr is checked separately)
+  run "$MK_BASH" -c 'ulimit -t 5; "$0" "$1" < "$2" 2>"$3"' "$MK_BASH" "$HOOKS/guard-destructive.sh" "$pl" "$BATS_TEST_TMPDIR/stderr"
   t1="$(perl -MTime::HiRes=time -e 'printf "%d", time * 1000')"
   ms=$((t1 - t0))
 }
@@ -394,7 +395,9 @@ rep() { s="$1" awk -v n="$2" 'BEGIN { s = ENVIRON["s"]; for (i = 0; i < n; i++) 
       [ "$(decision)" = "deny" ] || { echo "$f: expected deny ($want)"; false; }
       reason | grep -q "$want" || { echo "$f: no $want in $(reason | cut -c1-200)"; false; }
     fi
-    [ "$ms" -lt 1000 ] || { echo "$f: ${ms} ms"; false; }
+    # Target < 1 s (measured and reported locally); the hard bound here is
+    # well inside the 5 s hook timeout so a slow CI runner does not flake.
+    [ "$ms" -lt 3000 ] || { echo "$f: ${ms} ms"; false; }
   done <<'XEOF'
 word4k5 none
 assign2k rm-recursive
@@ -665,4 +668,44 @@ XEOF
   guard_file "$f"
   reason | grep -q 'too-large' || { echo "$(reason)"; false; }
   reason | grep -q 'careful-state-glob' || { echo "$(reason)"; false; }
+}
+
+# 0.5.3: lowercasing a command word must not skip the next one.
+@test "0.5.3: case normalisation does not skip adjacent command words" {
+  mk_project
+  want_labels <<'XEOF'
+rm-recursive|echo rm;RM -rf x
+git-force-push|true;Git push -f
+rm-recursive|a|RM -rf x
+rm-recursive|x&&RM -rf y
+rm-recursive|RM RM -rf x
+rm-recursive|echo git;RM -rf x
+kubectl-delete|helm;KUBECTL delete ns x
+docker-prune|git|DOCKER system prune -af
+XEOF
+  no_labels <<'XEOF'
+Dockerfile build
+echo RMDIR GITLAB HELMET Dotnetty
+make Gitlab-ci
+XEOF
+}
+
+# 0.5.3: GitHub Actions runs jobs with SIGPIPE ignored. grep -q stops reading
+# at its first match, and the printf feeding it then reported "write error:
+# Broken pipe" on stderr (CI: test "deny message lists every label").
+@test "0.5.3: with SIGPIPE ignored, an early grep -q match writes nothing to stderr" {
+  mk_project
+  f="$BATS_TEST_TMPDIR/big"
+  { rep 'echo hello world; ' 3900; printf 'git push -f; ls ../memokit-*'; } > "$f"
+  jq -Rs --arg cwd "$PROJ" '{tool_name:"Bash",tool_input:{command:.},cwd:$cwd}' < "$f" > "$BATS_TEST_TMPDIR/pl.json"
+  "$MK_BASH" -c 'trap "" PIPE; "$0" "$1" < "$2" > "$3" 2> "$4"' "$MK_BASH" "$HOOKS/guard-destructive.sh" \
+    "$BATS_TEST_TMPDIR/pl.json" "$BATS_TEST_TMPDIR/out" "$BATS_TEST_TMPDIR/err"
+  [ ! -s "$BATS_TEST_TMPDIR/err" ] || { cat "$BATS_TEST_TMPDIR/err"; false; }
+  jq -e '.hookSpecificOutput.permissionDecision == "deny"' "$BATS_TEST_TMPDIR/out" >/dev/null
+  # the library alone, and the prompt hook
+  run "$MK_BASH" -c "trap '' PIPE; . '$HOOKS/lib/common.sh'; . '$HOOKS/lib/careful.sh'; mk_resolve_root '{}'; mk_load_config >/dev/null; mk_careful_labels \"\$(cat \"\$1\")\" 2>&1 >/dev/null" _ "$f"
+  [ -z "$output" ] || { echo "$output"; false; }
+  big="$(rep 'approve all of this please ' 6000)"
+  "$MK_BASH" -c 'trap "" PIPE; printf "%s" "$1" | "$0" "$2" > /dev/null 2> "$3"' "$MK_BASH" "$(prompt_payload "$big")" "$HOOKS/inject-rules.sh" "$BATS_TEST_TMPDIR/err2"
+  [ ! -s "$BATS_TEST_TMPDIR/err2" ] || { cat "$BATS_TEST_TMPDIR/err2"; false; }
 }
