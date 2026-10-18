@@ -25,3 +25,19 @@ load helpers
   grep -q '^## §7' "$MK_REPO/WORKING-MODEL.md"
   for l in en tr; do grep '^MK_T_IR_RULES_BASE=' "$HOOKS/messages/$l.sh" | grep -qF 'WORKING-MODEL.md §7' || { echo "$l"; false; }; done
 }
+@test "§8 and §9 exist and the rule block cites §9 in both languages" {
+  grep -q '^## §8 Design quality' "$MK_REPO/WORKING-MODEL.md"
+  grep -q '^## §9 Test tiers' "$MK_REPO/WORKING-MODEL.md"
+  for l in en tr; do grep '^MK_T_IR_RULES_BASE=' "$HOOKS/messages/$l.sh" | grep -qF 'WORKING-MODEL.md §9' || { echo "$l"; false; }; done
+}
+@test "§8 states the pragmatic SOLID/KISS/YAGNI balance" {
+  sec="$(sed -n '/^## §8/,/^## §9/p' "$MK_REPO/WORKING-MODEL.md")"
+  for w in SOLID KISS YAGNI 'second real use' 'docs/PATTERNS.md'; do printf '%s' "$sec" | grep -qF "$w" || { echo "$w"; false; }; done
+}
+@test "§9 states tiers, approval question, gate-pending and gates.md" {
+  sec="$(sed -n '/^## §9/,$p' "$MK_REPO/WORKING-MODEL.md")"
+  for w in 'Tier 1' 'Tier 2' 'Tier-2 gates next, or more work first?' 'gate-pending' '.claude/memokit/gates.md' 'never guess'; do printf '%s' "$sec" | grep -qF "$w" || { echo "$w"; false; }; done
+}
+@test "final M5: overlays cannot loosen any section" {
+  grep -F '## §5' -A2 "$MK_REPO/WORKING-MODEL.md" | grep -qF 'They cannot loosen §1–§9.'
+}

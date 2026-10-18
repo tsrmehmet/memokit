@@ -195,6 +195,8 @@ git-reset-hard|git reset --har HEAD~1
 git-clean|"git" clean -fdx
 git-clean|git clean --fo -d
 git-branch-delete|"git" branch -D old
+git-worktree-force|"git" worktree remove --force x
+git-worktree-force|sudo git worktree remove -f x
 git-discard-all|"git" checkout -- .
 git-discard-all|(git restore .)
 kubectl-delete|"kubectl" delete ns x

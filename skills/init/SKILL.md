@@ -24,13 +24,18 @@ If the stack is empty/unknown, say you will use defaults and that `/memokit:init
 
 ## 2. Write
 1. Build the config JSON in a temp file; `$INIT write-config "$ROOT" <file>`.
-2. `$INIT scaffold "$ROOT" <lang>` — it never overwrites; show the created/kept list.
+2. `$INIT scaffold "$ROOT" <lang>` — it never overwrites; show the created/kept list. Besides the docs it creates the overlay skeletons `.claude/memokit/rules.md`, `coder.md`, `reviewer.md`, `.claude/memokit/analyst.md` (project analysis checks) and `.claude/memokit/gates.md` (test tiers, WORKING-MODEL §9). Offer to fill `gates.md` now: ask the user for the Tier-1 commands (build + unit tests, no Docker, no secrets) and the Tier-2 heavy gates, and write only what they give — never guess; left empty, the orchestrator asks before the first coder slice.
 3. `$INIT settings "$ROOT"`.
-4. Code graph — only if the user said yes:
+4. Ignore parallel-run ledgers and lane worktrees (idempotent; `/memokit:parallel` creates them):
+   ```bash
+   git check-ignore -q .claude/memokit/runs/x || printf '\n.claude/memokit/runs/\n' >> .gitignore
+   git check-ignore -q .claude/worktrees/x || printf '\n.claude/worktrees/\n' >> .gitignore
+   ```
+5. Code graph — only if the user said yes:
    - `git check-ignore -q graphify-out/graph.json || echo not-ignored`; if not ignored, append `graphify-out/` to `.gitignore`.
    - Look for ignored files that exist under the root: `git ls-files -o -i --exclude-standard <root> | head -50`. graphify does not read nested `.gitignore` files, so build output or secrets found there (e.g. `.env`, auth/session files, bundles) go into a `.graphifyignore` at the repo root before the first build. Show the user what you excluded.
    - Build: `"${CLAUDE_PLUGIN_ROOT}/skills/handoff/scripts/memokit-graph.sh" refresh; echo "graph-exit=$?"` and show the output (node count, marker).
-5. Show `git status --short` and `git diff` to the user. **Do not commit** unless the user says so.
+6. Show `git status --short` and `git diff` to the user. **Do not commit** unless the user says so.
 
 ## 3. Verify (WORKING-MODEL §3)
 Tell the user to start a new session (hooks load at session start), then in that session check and show:

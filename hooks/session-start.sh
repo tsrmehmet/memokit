@@ -224,6 +224,40 @@ if [ "${MEMOKIT_DISK_OFF:-0}" != "1" ] && [ "$MK_DISK_MIN_FREE_GB" -gt 0 ] \
   esac
 fi
 
+# Leftover worktrees under .claude/worktrees/ and mk/* branches without one
+# (parallel lanes, Claude Code agent worktrees). Unrelated to the temp
+# leftovers above (Claude Code scratch dirs under /tmp). mk_wt_count is
+# read-only and silent outside git; with nothing to report it costs two git
+# calls, otherwise it adds only a du bounded to about 2 s (no status, so a
+# huge worktree cannot stall the hook). The payload cwd's own worktree is
+# not counted. Some size not measured -> the total is a lower bound. Lanes of
+# an active parallel run (ledger `status: active`) are not leftovers: they
+# get their own line naming the run, which /memokit:resume continues.
+WT_TXT=""
+# shellcheck source-path=SCRIPTDIR source=lib/worktrees.sh
+if . "$MK_LIB_DIR/worktrees.sh" 2>/dev/null; then
+  wt_cwd="$(printf '%s' "$PAYLOAD" | jq -r '.cwd // empty' 2>/dev/null)" || wt_cwd=""
+  wt_c="$(mk_wt_count "$MK_ROOT" "" "$wt_cwd" 2>/dev/null)"
+  wt_n=""; wt_kb=""; wt_un=""; wt_an=""; wt_runs=""
+  [ -n "$wt_c" ] && IFS="$(printf '\t')" read -r wt_n wt_kb wt_un wt_an wt_runs <<EOF3
+$wt_c
+EOF3
+  case "$wt_n$wt_kb$wt_un$wt_an" in
+    ''|*[!0-9]*) ;;
+    *) if [ "$wt_n" -gt 0 ]; then
+         wt_ge=""; [ "$wt_un" -gt 0 ] && wt_ge="≥ "
+         if [ "$wt_kb" -lt 1024 ]; then wt_h="$wt_kb KB"
+         else wt_h=""; [ "$TEMP_LIB" -eq 1 ] && wt_h="$(mk_human_kb "$wt_kb")"; fi
+         [ -n "$wt_h" ] || wt_h="$wt_kb KB"
+         WT_TXT="${nl}${nl}$(mk_msg SS_WT_LEFTOVER "$wt_n" "${wt_ge}${wt_h}")"
+       fi
+       case "$wt_runs" in
+         ''|*[!A-Za-z0-9._,\ -]*) ;;
+         *) [ "$wt_an" -gt 0 ] && WT_TXT="${WT_TXT}${nl}${nl}$(mk_msg SS_WT_ACTIVE_RUN "$wt_an" "$wt_runs")" ;;
+       esac ;;
+  esac
+fi
+
 # WORKING-MODEL.md is a plugin-shipped doc (sibling of hooks/, i.e.
 # $MK_HOOKS_DIR/..), not a project file -- it does not exist yet (see Task
 # 14), so this must tolerate its absence forever, not just until it ships.
@@ -234,5 +268,5 @@ fi
 
 # RISK was already computed above (before the invalid-config branch), since
 # it does not depend on config validity.
-ctx="$(mk_msg SS_HEADER "$MK_NAME")${nl}${nl}${STATE}${nl}${nl}[knowledge-health] ${HEALTH}${nl}${nl}${DOCS}${NOTES}${MISSING_TXT}${WARN_TXT}${LEFT_TXT}${RISK:+${nl}${RISK}}${WM:+${nl}${nl}${WM}}"
+ctx="$(mk_msg SS_HEADER "$MK_NAME")${nl}${nl}${STATE}${nl}${nl}[knowledge-health] ${HEALTH}${nl}${nl}${DOCS}${NOTES}${MISSING_TXT}${WARN_TXT}${LEFT_TXT}${WT_TXT}${RISK:+${nl}${RISK}}${WM:+${nl}${nl}${WM}}"
 emit_ctx "$ctx"

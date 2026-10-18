@@ -17,6 +17,8 @@
   "graph": { "root": "src", "maxCommitsBehind": 20 },
   "scratch": { "agentMaxMB": 1024, "staleAfterHours": 24, "reportMinMB": 500 },
   "disk": { "minFreeGB": 30, "dropWarnGB": 10 },
+  "parallel": { "maxCoders": 3, "maxReviewers": 3 },
+  "review": { "model": "auto" },
   "careful": {
     "patterns": [ { "match": "kubectl[[:space:]]+(apply|patch|scale)", "label": "kubectl-mutate" } ]
   }

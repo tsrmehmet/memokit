@@ -18,6 +18,8 @@ Goal: the next session reads `docs/STATE.md` and, when the user only says "devam
    ```
    Also sweep the **conversation**: decisions, preferences, scope changes, "later" items agreed with the user but not yet written anywhere. They exist only in this context — unwritten, they are lost.
 
+   **Active parallel run.** If any `.claude/memokit/runs/*/ledger.md` has `status: active` (a run not yet closed; a `status: stopped` or `status: closed` ledger is not routed to — its lanes are ordinary leftovers): tell running coders and reviewers to finish or stop cleanly first (no background work left), then update the ledger with each lane's real state — before the STATE commit. The ledger is git-ignored and local: leave it on disk, never `git add -f` it; STATE.md is what the commit carries. STATE.md names the run id and each lane's state, and its single next step is "Resume run <id> with /memokit:parallel" (`/memokit:parallel` resumes from the ledger). During handoff never remove a worktree or branch and never run Tier 2.
+
 2. **Rewrite `docs/STATE.md`**, keeping its template and order: last updated date · active phase/slice · **the single next step** (one sentence; if unclear write "decision pending: …") · open questions/blockers · recent work commits · environment (test counts from a real run, branch) · where things are (short). No narrative history — that goes to `docs/HISTORY.md` (create it if missing).
 
 3. **PRINT THE HANDOFF TABLE — in full, before trimming and before committing, visible to the user.** This step must produce output; "checked, all clear" is not a check.

@@ -36,7 +36,7 @@ A subagent report is a **claim**, not evidence. Reports to the user carry the cl
 - New session: `/memokit:resume` (or the user says "devam et"/"continue").
 
 ## §5 Project overlays
-Project files in `.claude/memokit/` (`rules.md`, `coder.md`, `reviewer.md`, `handoff.md`, `resume.md`, `triage.md`) add and narrow rules. They cannot loosen §1–§4.
+Project files in `.claude/memokit/` (`rules.md`, `coder.md`, `reviewer.md`, `analyst.md`, `gates.md`, `handoff.md`, `resume.md`, `triage.md`) add and narrow rules. They cannot loosen §1–§9.
 
 ## §6 Language
 Talk to the user in the project's `language` from `.claude/memokit.json`.
@@ -52,3 +52,16 @@ git -C "$REPO" ls-files -z -co --exclude-standard -- <paths> | (cd "$REPO" && xa
 - Every report ends with `temp left: <size>` (e.g. `temp left: 0`).
 - Mutation testing: copy once, then mutate and restore a file in that copy; never one full copy per mutation.
 - Why: a SubagentStop gate blocks a subagent that leaves ≥ `scratch.agentMaxMB` (default 1024) of new files in the scratchpad; a disk watch warns when one command eats ≥ `disk.dropWarnGB` (10) or free space is below `disk.minFreeGB` (30).
+
+## §8 Design quality
+- Apply SOLID pragmatically, balanced by KISS and YAGNI: no complex structure for a simple job.
+- No abstraction (interface, layer, indirection) without a second real use.
+- The project's `docs/PATTERNS.md` wins over all of this.
+- Reviewers reject both SOLID violations that matter and over-engineering.
+
+## §9 Test tiers
+General rule, sequential and parallel work alike.
+- **Tier 1**, in every slice: build + unit tests of the touched projects + the slice's new or changed tests, red then green. Never Docker/Testcontainers, integration or E2E.
+- **Tier 2** (heavy gates: integration, coverage, merge gate, E2E): once per batch, only after the user explicitly approves. Ask "Tier-2 gates next, or more work first?"; never run it unasked.
+- A slice is `gate-pending` until Tier 2 is green; do not call it done before.
+- Tier commands come from `.claude/memokit/gates.md`. If it is missing, ask the user once and write it; never guess.

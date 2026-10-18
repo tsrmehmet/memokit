@@ -170,6 +170,23 @@
         "dropWarnGB": { "type": "integer", "minimum": 1, "default": 10, "description": "Free-space drop (GB) during a single Bash command that triggers a warning." }
       }
     },
+    "parallel": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Limits for parallel wave execution.",
+      "properties": {
+        "maxCoders": { "type": "integer", "minimum": 1, "default": 3, "description": "Maximum coder subagents running at once." },
+        "maxReviewers": { "type": "integer", "minimum": 1, "default": 3, "description": "Maximum reviewer subagents running at once." }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Reviewer settings.",
+      "properties": {
+        "model": { "enum": ["auto", "opus", "sonnet"], "default": "auto", "description": "Reviewer model: auto picks by risk." }
+      }
+    },
     "careful": {
       "type": "object",
       "description": "Destructive-command guard. Project patterns are added to the builtin set; they can only add, never remove.",

@@ -189,3 +189,31 @@ lib() { "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; $1"; }
   run lib 'mk_resolve_root "{}"; mk_load_config; printf "[%s]" "$MK_CONFIG_WARN"'
   [ "$output" = "[]" ]
 }
+
+@test "parallel/review defaults when absent" {
+  mk_project '{"version":1,"project":{"name":"Demo","tag":"DMO"}}'
+  run lib 'mk_resolve_root "{}"; mk_load_config; printf "%s|%s|%s" "$MK_PARALLEL_MAX_CODERS" "$MK_PARALLEL_MAX_REVIEWERS" "$MK_REVIEW_MODEL"'
+  [ "$output" = "3|3|auto" ]
+}
+
+@test "parallel/review values are read" {
+  mk_project '{"version":1,"project":{"name":"D","tag":"DMO"},"parallel":{"maxCoders":5,"maxReviewers":1},"review":{"model":"opus"}}'
+  run lib 'mk_resolve_root "{}"; mk_load_config; printf "%s|%s|%s" "$MK_PARALLEL_MAX_CODERS" "$MK_PARALLEL_MAX_REVIEWERS" "$MK_REVIEW_MODEL"'
+  [ "$output" = "5|1|opus" ]
+}
+
+@test "parallel/review invalid values are rejected" {
+  for c in 'parallel|{"maxCoders":0}' 'parallel|{"maxReviewers":1.5}' 'parallel|"x"' \
+           'review|{"model":"haiku"}' 'review|[]'; do
+    k="${c%%|*}"; v="${c#*|}"
+    mk_project "{\"version\":1,\"project\":{\"name\":\"D\",\"tag\":\"DMO\"},\"$k\":$v}"
+    run lib 'mk_resolve_root "{}"; mk_load_config; echo "$MK_CONFIG_ERR"'
+    [ "$output" = "$k" ] || { echo "accepted: $c -> $output"; false; }
+  done
+}
+
+@test "parallel/review are known keys" {
+  mk_project '{"version":1,"project":{"name":"D","tag":"DMO"},"parallel":{},"review":{}}'
+  run lib 'mk_resolve_root "{}"; mk_load_config; printf "[%s]" "$MK_CONFIG_WARN"'
+  [ "$output" = "[]" ]
+}

@@ -272,6 +272,10 @@ mk_careful_builtin() {
        '[[:space:]]-[a-zA-Z]*(d[a-zA-Z]*f|f[a-zA-Z]*d)[a-zA-Z]*([[:space:]]|$)'; then
     printf 'git-branch-delete\n'
   fi
+  if _mk_cf_rule "$segs" "$(_mk_cf_cmdre git worktree)" '[[:space:]]remove([[:space:]]|$)' \
+       "[[:space:]]($MK_CF_FORCE|-[a-zA-Z]*f[a-zA-Z]*)([[:space:]]|\$)"; then
+    printf 'git-worktree-force\n'
+  fi
   if _mk_cf_rule "$segs" "$(_mk_cf_cmdre git 'checkout|restore')" '[[:space:]]\.([[:space:]]|$)' \
        '![[:space:]](--staged|-S)([[:space:]]|$)' ||
      _mk_cf_rule "$segs" "$(_mk_cf_cmdre git 'checkout|restore')" '[[:space:]]\.([[:space:]]|$)' \

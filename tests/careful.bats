@@ -44,6 +44,10 @@ git-force-push|cd repo && git -C sub push --force
 git-reset-hard|git reset --hard HEAD~1
 git-clean|git clean -fd
 git-branch-delete|git branch -D old
+git-worktree-force|git worktree remove --force .claude/worktrees/mk-r1-a
+git-worktree-force|git worktree remove -f x
+git-worktree-force|git worktree remove -ff x
+git-worktree-force|git -C repo worktree remove --force x
 git-discard-all|git checkout -- .
 git-discard-all|git restore .
 rm-recursive|rm -rf src
@@ -78,6 +82,14 @@ git push -u origin feat/x
 git reset --soft HEAD~1
 git clean -n
 git branch -d merged
+git worktree remove .claude/worktrees/mk-r1-a
+git worktree list
+git worktree add ../x -b y
+git branch -d mk/r1/a
+git worktree remove .claude/worktrees/mk-r1-L1-fix
+git branch -d mk/r1/L1-fix
+git worktree remove x --force-later
+git worktree prune
 git checkout -- src/a.cs
 rm -rf node_modules
 rm -rf bin obj

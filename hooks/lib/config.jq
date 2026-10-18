@@ -1,6 +1,6 @@
 # Validates .claude/memokit.json and emits shell assignments (quoted with @sh).
 def err($m): "MK_CONFIG_ERR=\($m | @sh)";
-def known: ["$schema","version","project","language","guardedDirs","contextBudget","stateStale","sessionStart","hints","graph","careful","scratch","disk"];
+def known: ["$schema","version","project","language","guardedDirs","contextBudget","stateStale","sessionStart","hints","graph","careful","scratch","disk","parallel","review"];
 def builtin_all: ["debugging","decision","review","handoff","resume","graphify"];
 def dir_ok: type == "string"
   and test("^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$")
@@ -32,6 +32,11 @@ elif has("scratch") and ((.scratch | type) != "object"
 elif has("disk") and ((.disk | type) != "object"
     or ((.disk.minFreeGB // 30) | (type != "number") or (. < 0))
     or ((.disk.dropWarnGB // 10) | (type != "number") or (. < 1))) then err("disk")
+elif has("parallel") and ((.parallel | type) != "object"
+    or ((.parallel.maxCoders // 3) | (type != "number") or (. < 1) or (floor != .))
+    or ((.parallel.maxReviewers // 3) | (type != "number") or (. < 1) or (floor != .))) then err("parallel")
+elif has("review") and ((.review | type) != "object"
+    or ((.review.model // "auto") | IN("auto","opus","sonnet") | not)) then err("review")
 else
   [ "MK_CONFIG_ERR=''",
     "MK_NAME=\(.project.name | @sh)",
@@ -53,6 +58,9 @@ else
     "MK_SCRATCH_REPORT_MIN_MB=\((.scratch.reportMinMB // 500) | floor | tostring | @sh)",
     "MK_DISK_MIN_FREE_GB=\((.disk.minFreeGB // 30) | floor | tostring | @sh)",
     "MK_DISK_DROP_WARN_GB=\((.disk.dropWarnGB // 10) | floor | tostring | @sh)",
+    "MK_PARALLEL_MAX_CODERS=\((.parallel.maxCoders // 3) | floor | tostring | @sh)",
+    "MK_PARALLEL_MAX_REVIEWERS=\((.parallel.maxReviewers // 3) | floor | tostring | @sh)",
+    "MK_REVIEW_MODEL=\((.review.model // "auto") | @sh)",
     "MK_CONFIG_WARN=\([keys[] | select(. as $k | known | index($k) | not)] | join(",") | @sh)"
   ] | join("\n")
 end

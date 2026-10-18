@@ -24,6 +24,17 @@ INIT() { "$MK_BASH" "$MK_REPO/skills/init/scripts/memokit-init.sh" "$@"; }
   [ -f "$PROJ/docs/DECISIONS.md" ] && [ -f "$PROJ/.claude/memokit/coder.md" ]
   printf '%s' "$output" | grep -q 'kept docs/STATE.md'
 }
+@test "scaffold creates the analyst and gates overlay skeletons and keeps existing ones" {
+  mk_project none; mkdir -p "$PROJ/.claude/memokit"; printf 'MINE' > "$PROJ/.claude/memokit/gates.md"
+  run INIT scaffold "$PROJ" en; [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -qx 'created .claude/memokit/analyst.md'
+  printf '%s' "$output" | grep -qx 'kept .claude/memokit/gates.md'
+  [ "$(cat "$PROJ/.claude/memokit/gates.md")" = "MINE" ]
+  cmp -s "$MK_REPO/skills/init/templates/analyst.md" "$PROJ/.claude/memokit/analyst.md"
+  rm "$PROJ/.claude/memokit/gates.md"; run INIT scaffold "$PROJ" en
+  printf '%s' "$output" | grep -qx 'created .claude/memokit/gates.md'
+  grep -qF '## Tier 1' "$PROJ/.claude/memokit/gates.md"
+}
 @test "settings merge keeps other keys and drops legacy hooks" {
   mk_project none
   printf '%s' '{"permissions":{"allow":["Bash(git status)"]},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR/.claude/hooks/x.sh\""}]}],"Notification":[{"hooks":[{"type":"command","command":"say hi"}]}]}}' > "$PROJ/.claude/settings.json"

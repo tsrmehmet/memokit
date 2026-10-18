@@ -8,6 +8,21 @@
 #          outside [A-Za-z0-9._/@+,:%-] (non-ASCII included): it is never
 #          offered and must not be deleted by name.
 #   free   free disk space, human readable
+#   worktrees
+#          TSV lines: status <TAB> kind <TAB> kb <TAB> human <TAB> last commit (UTC
+#          ISO) <TAB> worktree path or branch <TAB> branch <TAB> merged-into
+#          (head|default|-) <TAB> note, for every leftover worktree under
+#          .claude/worktrees/ and mk/* branch without a worktree, except the one
+#          this shell runs in (hooks/lib/worktrees.sh mk_wt_list; statuses
+#          documented there). On top of those, for a merged-clean row:
+#          "manual" when the name under .claude/worktrees/ or the branch holds a
+#          char outside [A-Za-z0-9._/@+,:%-], or the path a quote or "?" (a
+#          control char), or an ignored entry holds a nested .git;
+#          "merged-ignored" when the worktree has ignored files (git worktree
+#          remove would delete them), named in the note; "dirty" when that
+#          check sees a change. An "active-run" row (a lane of a run whose
+#          ledger says status: active) names its run in the note. Needs no
+#          temp dir.
 # The current session comes from MEMOKIT_SESSION_ID / MEMOKIT_TRANSCRIPT_PATH,
 # else the newest *.jsonl in ${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<slug of the
 # project root>/.
@@ -21,8 +36,8 @@ SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 CMD="${1:-}"
 case "$CMD" in
-  list|free) ;;
-  *) printf 'usage: memokit-temp.sh list|free\n' >&2; exit 2 ;;
+  list|free|worktrees) ;;
+  *) printf 'usage: memokit-temp.sh list|free|worktrees\n' >&2; exit 2 ;;
 esac
 
 mk_resolve_root "$(jq -nc --arg c "$PWD" '{cwd:$c}' 2>/dev/null || printf '{}')"
@@ -30,6 +45,85 @@ if ! mk_active; then printf 'memokit is not configured here (.claude/memokit.jso
 if ! mk_load_config; then printf 'invalid .claude/memokit.json (field: %s)\n' "$MK_CONFIG_ERR" >&2; exit 2; fi
 # shellcheck source-path=SCRIPTDIR source=../../../hooks/lib/temp.sh
 . "$MK_LIB_DIR/temp.sh"
+
+if [ "$CMD" = "worktrees" ]; then
+  # shellcheck source-path=SCRIPTDIR source=../../../hooks/lib/worktrees.sh
+  . "$MK_LIB_DIR/worktrees.sh"
+  tab="$(printf '\t')"
+  # The worktree this shell runs in is never a leftover, whatever MK_ROOT is.
+  wt="$(mk_wt_list "$MK_ROOT" "" "$PWD")"
+  [ -n "$wt" ] || exit 0
+  # ignored_scan WT -- sets ig_n (ignored entries), ig_list (first 3, ", "
+  # separated, "?" for control chars), ig_git (1 when an ignored dir holds a .git) and
+  # returns 1 when the status cannot be read or shows anything but "!!".
+  ignored_scan() {
+    local f rec rc e
+    ig_n=0; ig_list=""; ig_git=0
+    f="$(mktemp "${TMPDIR:-/tmp}/memokit-wtig.XXXXXX" 2>/dev/null)" || return 1
+    git -C "$1" --no-optional-locks status --porcelain -z --ignored --untracked-files=normal --ignore-submodules=none > "$f" 2>/dev/null
+    rc=$?
+    if [ "$rc" -ne 0 ]; then rm -f "$f"; return 1; fi
+    while IFS= read -r -d '' rec; do
+      case "$rec" in
+        '!! '?*) e="${rec#!! }" ;;
+        *) rc=1; break ;;
+      esac
+      ig_n=$((ig_n + 1))
+      if [ "$ig_n" -le 3 ]; then ig_list="$ig_list${ig_list:+, }$(_mk_wt_show "$e")"; fi
+      # Only an ignored DIRECTORY (git prints it with a trailing "/") can hold a
+      # nested repo; one find per ignored file was seconds for a few thousand.
+      case "$e" in
+        */) if [ "$ig_git" -eq 0 ] && [ -n "$(find "$1/${e%/}" -name .git -print -quit 2>/dev/null)" ]; then ig_git=1; fi ;;
+      esac
+    done < "$f"
+    rm -f "$f"
+    [ "$ig_n" -gt 3 ] && ig_list="$ig_list, ..."
+    return "$rc"
+  }
+  out=""
+  while IFS="$tab" read -r kind st kb last name br mi; do
+    [ -n "$kind" ] || continue
+    note="-"
+    if [ "$st" = active-run ]; then
+      # mk/<run>/<lane>: name the run; the session's resume continues it.
+      case "$br" in mk/?*/?*) rid="${br#mk/}"; note="run ${rid%%/*} (/memokit:resume)" ;; *) note="active run (/memokit:resume)" ;; esac
+    fi
+    if [ "$st" = merged-clean ]; then
+      # Only the part memokit chose (the name under .claude/worktrees/ and the
+      # branch) must be plain; the repo path is single-quoted in the command,
+      # so it only must not hold a quote or a "?" (a control char shown as ?).
+      if [ "$kind" = worktree ]; then
+        rel="${name##*/.claude/worktrees/}"
+        [ "$rel" = "$name" ] && rel="${name##*/}"
+        case "$name" in *"'"*|*'?'*) st=manual ;; esac
+      else
+        rel=""
+      fi
+      case "$rel$br" in *[!A-Za-z0-9._/@+,:%-]*) st=manual ;; esac
+      [ "$st" = manual ] && note="name needs a hand-written command"
+    fi
+    if [ "$st" = merged-clean ] && [ "$kind" = worktree ]; then
+      if ! ignored_scan "$name"; then
+        st=dirty; mi="-"
+      elif [ "$ig_git" -eq 1 ]; then
+        st=manual; note="nested repo under ignored: $ig_n ($ig_list)"
+      elif [ "$ig_n" -gt 0 ]; then
+        st=merged-ignored; note="ignored: $ig_n ($ig_list)"
+      fi
+    fi
+    case "$kb" in
+      ''|*[!0-9]*) kb="?"; hs="?" ;;
+      *) if [ "$kb" -lt 1024 ]; then hs="$kb KB"; else hs="$(mk_human_kb "$kb")"; fi ;;
+    esac
+    out="$out$st$tab$kind$tab$kb$tab$hs$tab$last$tab$name$tab$br$tab$mi$tab$note
+"
+  done <<EOF
+$wt
+EOF
+  # One write: a reader that stops early (SIGPIPE ignored) costs one quiet error.
+  printf '%s' "$out" 2>/dev/null || exit 0
+  exit 0
+fi
 
 tp="${MEMOKIT_TRANSCRIPT_PATH:-}"
 sid="${MEMOKIT_SESSION_ID:-}"

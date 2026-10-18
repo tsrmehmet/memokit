@@ -214,6 +214,8 @@ cmd_scaffold() {
   mk_scaffold_one "$TEMPLATES_DIR/rules.md" "$root" ".claude/memokit/rules.md" "$name_esc" "$lang"
   mk_scaffold_one "$TEMPLATES_DIR/coder.md" "$root" ".claude/memokit/coder.md" "$name_esc" "$lang"
   mk_scaffold_one "$TEMPLATES_DIR/reviewer.md" "$root" ".claude/memokit/reviewer.md" "$name_esc" "$lang"
+  mk_scaffold_one "$TEMPLATES_DIR/analyst.md" "$root" ".claude/memokit/analyst.md" "$name_esc" "$lang"
+  mk_scaffold_one "$TEMPLATES_DIR/gates.md" "$root" ".claude/memokit/gates.md" "$name_esc" "$lang"
 }
 
 # ---------------------------------------------------------------------------

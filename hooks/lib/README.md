@@ -15,6 +15,10 @@ same way. Callers run
 `mk_load_config` first (staleness reads `MK_SCRATCH_STALE_HOURS`), then
 `mk_temp_init "$PAYLOAD"`; the live measurements it relies on are recorded in
 its header.
+`worktrees.sh` (leftover worktrees under `.claude/worktrees/` and `mk/*`
+branches) is sourced after `common.sh` by `session-start.sh` (`mk_wt_count`)
+and the sweep CLI (`mk_wt_list`); it is read-only and documents its statuses
+in its header.
 
 Every hook in this plugin starts with one of the two canonical preambles
 below, copied verbatim (only `<hook-name>` changes). This keeps the gate
