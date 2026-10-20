@@ -109,7 +109,9 @@ esac
 # temp entry needs no code (lib/temp.sh, mk_temp_rm_safe), but only for a
 # command that is one simple rm; the temp tree is located only then. When it
 # is not found (or the payload has no transcript_path), nothing changes.
+single_rm=0
 if mk_careful_single_rm "$cmd"; then
+  single_rm=1
   # shellcheck source-path=SCRIPTDIR source=lib/temp.sh
   . "$MK_LIB_DIR/temp.sh"
   mk_temp_init "$PAYLOAD" || true
@@ -132,5 +134,14 @@ case "$nl$labels$nl" in
   *"${nl}careful-state-glob${nl}"*) deny "$(mk_msg CF_STATE_GLOB "$all" "$code")"; exit 0 ;;
   *"${nl}too-large${nl}"*) deny "$(mk_msg CF_TOO_LARGE "$all" "$code")"; exit 0 ;;
 esac
-deny "$(mk_msg CF_BLOCKED "$all" "$code")"
+# A recursive rm of a scratchpad path inside a compound command: most often a
+# subagent cleaning its own temp dir in a chained command (2026-10 transcripts:
+# 140 of 146 such calls were denied, then abandoned). Point at the single-rm
+# form that passes; a lone rm that still failed gets no hint.
+hint=""
+case "$nl$labels$nl" in
+  *"${nl}rm-recursive${nl}"*)
+    if [ "$single_rm" -eq 0 ]; then case "$cmd" in */scratchpad/*) hint="$(mk_msg CF_SCRATCH_HINT)" ;; esac; fi ;;
+esac
+deny "$(mk_msg CF_BLOCKED "$all" "$code")$hint"
 exit 0

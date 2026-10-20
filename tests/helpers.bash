@@ -3,6 +3,9 @@ MK_REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 HOOKS="$MK_REPO/hooks"
 # Always run hooks under the OS bash so macOS CI proves 3.2 compatibility.
 MK_BASH="${MK_BASH:-/bin/bash}"
+# Session-start auto-clean (0.6.1) starts detached jobs; tests that exercise
+# it unset this and set MEMOKIT_AUTOCLEAN_SYNC=1.
+export MEMOKIT_AUTOCLEAN_OFF=1
 DEFAULT_CONFIG='{"version":1,"project":{"name":"Demo","tag":"DMO"},"language":"tr","guardedDirs":["src","tests"]}'
 
 mk_project() {

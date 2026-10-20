@@ -405,6 +405,19 @@ ledger() { mkdir -p "$1/.claude/memokit/runs/$2"; printf '# Run %s\n\nstatus: %s
   rm -rf "$R"
 }
 
+@test "ledger status line: Status with a capital and a last line without a newline still mark the run active (0.6.1 N1)" {
+  wt_repo
+  mkdir -p "$R/.claude/memokit/runs/r5" "$R/.claude/memokit/runs/r6"
+  printf '# Run\nStatus: active\n' > "$R/.claude/memokit/runs/r5/ledger.md"
+  printf 'status: active' > "$R/.claude/memokit/runs/r6/ledger.md"
+  wt_add mk-r5-a mk/r5/a; wt_add mk-r6-a mk/r6/a
+  wt_list "$R"
+  echo "$output"
+  [ "$(row_status "$W/mk-r5-a")" = active-run ]
+  [ "$(row_status "$W/mk-r6-a")" = active-run ]
+  rm -rf "$R"
+}
+
 # --- lanes made from a sibling worktree (final review I2) ---------------------
 @test "lanes under a sibling worktree's .claude/worktrees are listed; its ledger marks its active run" {
   wt_repo

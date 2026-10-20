@@ -267,6 +267,43 @@ cmd_settings() {
 }
 
 # ---------------------------------------------------------------------------
+# deny-tools <root> <tool>...
+# ---------------------------------------------------------------------------
+
+# Adds bare tool names (e.g. Artifact) to permissions.deny in the git-ignored
+# .claude/settings.local.json: a bare name takes the tool's definition out of
+# the session context. Keeps every other key, never duplicates a rule, and
+# makes sure git ignores the file. Exit 2 on a name that is not a bare tool
+# name (nothing written).
+cmd_deny_tools() {
+  local root="${1:-}" target tmp t
+  if [ -z "$root" ] || [ ! -d "$root" ]; then printf 'deny-tools: no project root given\n' >&2; return 2; fi
+  shift
+  [ "$#" -gt 0 ] || { printf 'deny-tools: no tool name given\n' >&2; return 2; }
+  for t in "$@"; do
+    case "$t" in ''|[!A-Za-z]*|*[!A-Za-z0-9_]*) printf 'deny-tools: not a bare tool name: %s\n' "$t" >&2; return 2 ;; esac
+  done
+  target="$root/.claude/settings.local.json"
+  mkdir -p "$root/.claude"
+  [ -f "$target" ] || printf '{}' > "$target"
+  tmp="$(mktemp "${TMPDIR:-/tmp}/memokit-settings.XXXXXX")"
+  if ! jq --args '.permissions.deny = (((.permissions.deny // []) + $ARGS.positional) | unique)' "$@" < "$target" > "$tmp"; then
+    rm -f "$tmp"; return 1
+  fi
+  mv "$tmp" "$target"
+  printf 'wrote %s\n' "$target"
+  if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if git -C "$root" ls-files --error-unmatch .claude/settings.local.json >/dev/null 2>&1; then
+      # Tracked: an ignore line would not apply; leave that to the user.
+      printf 'tracked .claude/settings.local.json (not ignored; untrack it with git rm --cached to keep it local)\n'
+    elif ! git -C "$root" check-ignore -q .claude/settings.local.json; then
+      printf '\n.claude/settings.local.json\n' >> "$root/.gitignore"
+      printf 'ignored .claude/settings.local.json\n'
+    fi
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # extract-legacy <root>
 # ---------------------------------------------------------------------------
 
@@ -484,6 +521,10 @@ case "${1:-}" in
     shift
     cmd_settings "$@"
     ;;
+  deny-tools)
+    shift
+    cmd_deny_tools "$@"
+    ;;
   extract-legacy)
     shift
     cmd_extract_legacy "$@"
@@ -493,7 +534,7 @@ case "${1:-}" in
     cmd_remove_legacy "$@"
     ;;
   *)
-    printf 'usage: memokit-init.sh {detect|write-config|scaffold|settings|extract-legacy|remove-legacy} <root> [args...]\n' >&2
+    printf 'usage: memokit-init.sh {detect|write-config|scaffold|settings|deny-tools|extract-legacy|remove-legacy} <root> [args...]\n' >&2
     exit 2
     ;;
 esac

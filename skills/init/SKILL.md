@@ -20,12 +20,13 @@ Run `$INIT detect "$ROOT"`.
 - Guarded dirs (default `src`, `tests`; propose extra dirs from the detected stack, e.g. `web` for a separate frontend).
 - Docs to show at session start (default none).
 - Code graph (graphify) — always ask, with a measured recommendation. Measure first: `command -v graphify` and `git ls-files <main source dir> | wc -l`. Recommend **yes** when graphify is installed and the source dir has roughly 50+ files (say: code only, AST extraction, no LLM tokens, seconds to a minute; refreshed on every handoff that changed code); recommend **later** for an empty or tiny project (it can be added to `.claude/memokit.json` any time). If graphify is not installed, say so and recommend installing it before enabling this. Proposed setting: `"graph": {"root": "<main source dir>"}` (`maxCommitsBehind` defaults to 20).
+- Artifact tool (Claude Code publishes HTML pages, e.g. UI mockups or design previews, to claude.ai) — always ask: "Will this project need Artifact pages (mockups, design previews)?" Recommend **no** unless the project has UI design work: its tool definition is loaded into every session's opening context (measured 2026-10: Artifact, Workflow and ScheduleWakeup together about 14.8k tokens). Answer no → it is denied in this project's git-ignored `.claude/settings.local.json` (step 2). It can be turned back on any time by removing `Artifact` from `permissions.deny` there.
 If the stack is empty/unknown, say you will use defaults and that `/memokit:init` can be re-run after the tech decision (edit `.claude/memokit.json` directly then).
 
 ## 2. Write
 1. Build the config JSON in a temp file; `$INIT write-config "$ROOT" <file>`.
 2. `$INIT scaffold "$ROOT" <lang>` — it never overwrites; show the created/kept list. Besides the docs it creates the overlay skeletons `.claude/memokit/rules.md`, `coder.md`, `reviewer.md`, `.claude/memokit/analyst.md` (project analysis checks) and `.claude/memokit/gates.md` (test tiers, WORKING-MODEL §9). Offer to fill `gates.md` now: ask the user for the Tier-1 commands (build + unit tests, no Docker, no secrets) and the Tier-2 heavy gates, and write only what they give — never guess; left empty, the orchestrator asks before the first coder slice.
-3. `$INIT settings "$ROOT"`.
+3. `$INIT settings "$ROOT"`. If the user said no to Artifact: `$INIT deny-tools "$ROOT" Artifact` (adds it to `permissions.deny` in `.claude/settings.local.json`, keeps every other key, and makes sure git ignores that file); it takes effect from the next session.
 4. Ignore parallel-run ledgers and lane worktrees (idempotent; `/memokit:parallel` creates them):
    ```bash
    git check-ignore -q .claude/memokit/runs/x || printf '\n.claude/memokit/runs/\n' >> .gitignore

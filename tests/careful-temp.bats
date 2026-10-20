@@ -330,3 +330,15 @@ C" ]
   [ "$output" = "plain-ok
 continued-ok" ] || { echo "$output"; false; }
 }
+
+@test "temp rm (0.6.1): a chained scratchpad rm is denied with the single-call hint; other denials get none" {
+  denied "rm -rf $TT_SP/rv10a && echo done"
+  reason | grep -qF 'rm -rf <'
+  denied "S=$TT_SP/rv10a; rm -rf \$S"
+  reason | grep -qF 'rm -rf <'
+  # a lone rm that still fails (not a direct child) and a chained rm elsewhere
+  denied "rm -rf $TT_SP/real/Documents"
+  ! reason | grep -qF 'rm -rf <'
+  denied "rm -rf $TROOT/outside && echo done"
+  ! reason | grep -qF 'rm -rf <'
+}

@@ -5,7 +5,7 @@ description: Only in projects that have .claude/memokit.json — clean the stale
 
 # Sweep — stale temp leftovers and leftover worktrees
 
-Goal: give back disk space that finished sessions left behind, without ever touching a live session. Talk to the user in the project `language` (`.claude/memokit.json`). Deletion is irreversible, so the user decides what goes.
+Goal: give back disk space that finished sessions left behind, without ever touching a live session. Since 0.6.1 the session start removes the plain cases by itself (stale temp entries without `.memokit-keep`; `merged-clean` worktrees unused for `scratch.staleAfterHours`, and merged `mk/*` branches) unless `MEMOKIT_AUTOCLEAN_OFF=1`; this skill is for the rest, which needs the user's decision. Talk to the user in the project `language` (`.claude/memokit.json`). Deletion is irreversible, so the user decides what goes.
 
 ## Steps
 

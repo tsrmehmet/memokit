@@ -180,10 +180,31 @@ if [ -f "$MK_ROOT/docs/HISTORY.md" ]; then
 fi
 NOTES="${NOTES}${nl}${nl}$(mk_msg SS_RESUME_NOTE)"
 
+# Auto-clean (0.6.1, user decision): stale temp entries of earlier sessions
+# and merged, clean leftover worktrees are removed here, in one detached
+# background job so a multi-GB removal cannot outlast the hook timeout.
+# MEMOKIT_AUTOCLEAN_OFF=1 restores report-only; MEMOKIT_AUTOCLEAN_SYNC=1 (test
+# seam) runs the removals before the hook returns.
+AUTOCLEAN=1
+[ "${MEMOKIT_AUTOCLEAN_OFF:-0}" = "1" ] && AUTOCLEAN=0
+# _ss_bg FN ARGS... -- FN in the background, every fd detached from the hook.
+_ss_bg() {
+  if [ "${MEMOKIT_AUTOCLEAN_SYNC:-0}" = "1" ]; then "$@" >/dev/null 2>&1; return 0; fi
+  ( trap '' HUP; "$@" ) </dev/null >/dev/null 2>&1 &
+  return 0
+}
+# _ss_h KB -- KB human readable (mk_human_kb prints "0 MB" below 1 MB).
+_ss_h() { if [ "$1" -lt 1024 ]; then printf '%s KB' "$1"; else mk_human_kb "$1"; fi; }
+# _ss_rm_all PATH... -- one literal rm per entry (each checked by mk_temp_rm_safe).
+# shellcheck disable=SC2317,SC2329  # invoked through _ss_bg
+_ss_rm_all() { local p; for p in "$@"; do rm -rf -- "$p"; done; }
+
 # Leftover temp entries of earlier sessions and the low-disk floor. Both are
 # best effort and silent on any failure; the leftover total is cached for
 # check-disk.sh's Stop message (same sanitised session id, same state-file
-# safety rules: no symlink, owned by us, umask-077 temp file + mv).
+# safety rules: no symlink, owned by us, umask-077 temp file + mv). An entry
+# is auto-removed only when mk_temp_rm_safe passes it as a whole stale
+# sibling and nothing under it holds .memokit-keep; the rest is reported.
 LEFT_TXT=""
 TEMP_LIB=0
 # shellcheck source-path=SCRIPTDIR source=lib/temp.sh
@@ -191,15 +212,26 @@ TEMP_LIB=0
 if [ "${MEMOKIT_SCRATCH_OFF:-0}" != "1" ] && [ "$TEMP_LIB" -eq 1 ] \
    && mk_temp_init "$PAYLOAD" >/dev/null 2>&1; then
   ss_list="$(mk_temp_stale_list 3 2>/dev/null)" && {
-    ss_n=0; ss_kb=0; ss_trunc=""
+    ss_n=0; ss_kb=0; ss_trunc=""; ss_rm=(); ss_rm_kb=0
     while IFS= read -r ss_line; do
       case "$ss_line" in
         TRUNCATED) ss_trunc="≥ " ;;
-        [0-9]*) ss_n=$((ss_n + 1)); ss_kb=$((ss_kb + ${ss_line%%"$(printf '\t')"*})) ;;
+        [0-9]*)
+          ss_e_kb="${ss_line%%"$(printf '\t')"*}"; ss_e="${ss_line#*"$(printf '\t')"}"
+          if [ "$AUTOCLEAN" -eq 1 ] && mk_temp_rm_safe "$ss_e" \
+             && [ -z "$(find "$ss_e" -name .memokit-keep -print -quit 2>/dev/null)" ]; then
+            ss_rm[${#ss_rm[@]}]="$ss_e"; ss_rm_kb=$((ss_rm_kb + ss_e_kb))
+          else
+            ss_n=$((ss_n + 1)); ss_kb=$((ss_kb + ss_e_kb))
+          fi ;;
       esac
     done <<EOF2
 $ss_list
 EOF2
+    if [ "${#ss_rm[@]}" -gt 0 ]; then
+      _ss_bg _ss_rm_all "${ss_rm[@]}"
+      LEFT_TXT="${nl}${nl}$(mk_msg SS_TEMP_AUTOCLEAN "${#ss_rm[@]}" "$(_ss_h "$ss_rm_kb")")"
+    fi
     ss_sid="$(printf '%s' "$(printf '%s' "$PAYLOAD" | jq -r '.session_id // "unknown"' 2>/dev/null)" | tr -c 'A-Za-z0-9_-' _)"
     [ -n "$ss_sid" ] || ss_sid="unknown"
     ss_f="$(mk_tmp "temp-leftover-${ss_sid}")"
@@ -209,7 +241,7 @@ EOF2
       }
     fi
     if [ "$ss_n" -gt 0 ] && [ "$ss_kb" -ge $(( MK_SCRATCH_REPORT_MIN_MB * 1024 )) ]; then
-      LEFT_TXT="${nl}${nl}$(mk_msg SS_TEMP_LEFTOVER "$ss_n" "${ss_trunc}$(mk_human_kb "$ss_kb")")"
+      LEFT_TXT="${LEFT_TXT}${nl}${nl}$(mk_msg SS_TEMP_LEFTOVER "$ss_n" "${ss_trunc}$(mk_human_kb "$ss_kb")")"
     fi
   }
 fi
@@ -234,6 +266,97 @@ fi
 # an active parallel run (ledger `status: active`) are not leftovers: they
 # get their own line naming the run, which /memokit:resume continues.
 WT_TXT=""
+# Auto-clean of leftover worktrees (0.6.1). Classifying needs a status per
+# worktree (and an ignored-file scan), which the hook itself must not wait
+# for, so a detached job does it: it takes the sweep CLI's `worktrees` rows
+# (the classification /memokit:sweep offers) and removes only `merged-clean`
+# ones:
+# - a worktree that looks unused: its index is older than
+#   scratch.staleAfterHours (a fresh one may be a live agent's that has not
+#   changed anything yet), no Claude Code transcript for its path was written
+#   within that time, and no process has its cwd in it (lsof, when present).
+#   Right before the removal its status (ignored files included) must still be
+#   empty, since `git worktree remove` deletes ignored files without asking.
+#   Then `git worktree remove` (never --force) and `git branch -d` for an mk/*
+#   branch;
+# - an mk/* branch without a worktree, merged into HEAD: `git branch -d`.
+# git's own refusal stays final. Needs git >= 2.31 (rev-parse --path-format);
+# older git removes nothing. The job writes "<removed> <left>" to a
+# per-project result file. When the leftover count equals the last result's
+# <left>, the session start prints the usual report line (they need the user)
+# and restarts the job only when that result is over an hour old; otherwise it
+# starts the job (one at a time: a lock dir) and says so instead.
+# _ss_wt_job ROOT FROM RESULT LOCK
+# shellcheck disable=SC2317,SC2329  # invoked through _ss_bg
+_ss_wt_job() {
+  local root="$1" from="$2" res="$3" lock="$4" tab rows kind st kb name br mi idx t now old rmd=0 left=0 tmp cwds="" tdir
+  unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY
+  tab="$(printf '\t')"; now="$(date +%s)"; old=$((MK_SCRATCH_STALE_HOURS * 3600))
+  # Every process's cwd, once (lsof -Fn prints "n<path>" lines).
+  if command -v lsof >/dev/null 2>&1; then cwds="$(lsof -nP -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')"; fi
+  rows="$(cd "$from" 2>/dev/null && "$BASH" "$MK_HOOKS_DIR/../skills/sweep/scripts/memokit-temp.sh" worktrees 2>/dev/null)" || rows=""
+  while IFS="$tab" read -r st kind kb _ _ name br mi _; do
+    [ -n "$kind" ] || continue
+    [ "$st" = active-run ] && continue
+    if [ "$st" = merged-clean ] && [ "$kind" = worktree ]; then
+      idx="$(git -C "$name" rev-parse --path-format=absolute --git-path index 2>/dev/null)" || idx=""
+      t=""; [ -n "$idx" ] && t="$(mk_temp_mtime "$idx")"
+      case "$t" in
+        ''|*[!0-9]*) ;;
+        *) tdir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(printf '%s' "$name" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+           if [ $((now - t)) -gt "$old" ] \
+              && [ -z "$(find "$tdir" -name '*.jsonl' -mmin -$((MK_SCRATCH_STALE_HOURS * 60)) -print -quit 2>/dev/null)" ] \
+              && ! printf '%s\n' "$cwds" | MK_P="$name" awk 'BEGIN { p = ENVIRON["MK_P"] } $0 == p || index($0, p "/") == 1 { f = 1 } END { exit !f }' \
+              && [ -z "$(git -C "$name" --no-optional-locks status --porcelain --ignored --untracked-files=normal 2>&1)" ] \
+              && git -C "$root" worktree remove "$name"; then
+             case "$br" in mk/?*) git -C "$root" branch -d "$br" ;; esac
+             rmd=$((rmd + 1)); continue
+           fi ;;
+      esac
+    elif [ "$st" = merged-clean ] && [ "$kind" = branch ] && [ "$mi" = head ]; then
+      case "$br" in mk/?*) if git -C "$root" branch -d "$br"; then rmd=$((rmd + 1)); continue; fi ;; esac
+    fi
+    left=$((left + 1))
+  done <<EOF4
+$rows
+EOF4
+  if [ ! -L "$res" ] && { [ ! -e "$res" ] || { [ -f "$res" ] && [ -O "$res" ]; }; }; then
+    tmp="$(umask 077; mktemp "$res.XXXXXX" 2>/dev/null)" && {
+      if printf '%s %s\n' "$rmd" "$left" > "$tmp"; then mv -f "$tmp" "$res" || rm -f "$tmp"; else rm -f "$tmp"; fi
+    }
+  fi
+  rmdir "$lock" 2>/dev/null
+  return 0
+}
+# _ss_wt_autoclean -- sets WT_AUTO_TXT, and WT_REPORT=0 when the job runs.
+_ss_wt_autoclean() {
+  local res lock r_left="" t from known=0
+  res="$(mk_tmp wt-autoclean)"; lock="$res.lock"
+  if [ -f "$res" ] && [ ! -L "$res" ] && [ -O "$res" ]; then
+    read -r _ r_left < "$res" 2>/dev/null || true
+    case "$r_left" in
+      ''|*[!0-9]*) ;;
+      *) if [ "$r_left" -eq "$wt_n" ]; then
+           # The last check left exactly these: report them as before.
+           known=1
+           t="$(mk_temp_mtime "$res")" || t=0
+           [ $(( $(date +%s) - t )) -lt 3600 ] && return 0
+         fi ;;
+    esac
+  fi
+  # A lock older than an hour is from a job that died.
+  if [ -d "$lock" ] && [ ! -L "$lock" ]; then
+    t="$(mk_temp_mtime "$lock")" || t=0
+    [ $(( $(date +%s) - t )) -ge 3600 ] && rmdir "$lock" 2>/dev/null
+  fi
+  mkdir "$lock" 2>/dev/null || return 0
+  from="$MK_ROOT"; [ -n "$wt_cwd" ] && [ -d "$wt_cwd" ] && from="$wt_cwd"
+  _ss_bg _ss_wt_job "$MK_ROOT" "$from" "$res" "$lock"
+  [ "$known" -eq 1 ] && return 0
+  WT_AUTO_TXT="${nl}${nl}$(mk_msg SS_WT_AUTOCLEAN "$wt_n" "$MK_SCRATCH_STALE_HOURS")"
+  WT_REPORT=0
+}
+WT_AUTO_TXT=""; WT_REPORT=1
 # shellcheck source-path=SCRIPTDIR source=lib/worktrees.sh
 if . "$MK_LIB_DIR/worktrees.sh" 2>/dev/null; then
   wt_cwd="$(printf '%s' "$PAYLOAD" | jq -r '.cwd // empty' 2>/dev/null)" || wt_cwd=""
@@ -244,7 +367,10 @@ $wt_c
 EOF3
   case "$wt_n$wt_kb$wt_un$wt_an" in
     ''|*[!0-9]*) ;;
-    *) if [ "$wt_n" -gt 0 ]; then
+    *) if [ "$wt_n" -gt 0 ] && [ "$AUTOCLEAN" -eq 1 ] && [ "$TEMP_LIB" -eq 1 ]; then
+         _ss_wt_autoclean
+       fi
+       if [ "$wt_n" -gt 0 ] && [ "$WT_REPORT" -eq 1 ]; then
          wt_ge=""; [ "$wt_un" -gt 0 ] && wt_ge="≥ "
          if [ "$wt_kb" -lt 1024 ]; then wt_h="$wt_kb KB"
          else wt_h=""; [ "$TEMP_LIB" -eq 1 ] && wt_h="$(mk_human_kb "$wt_kb")"; fi
@@ -268,5 +394,5 @@ fi
 
 # RISK was already computed above (before the invalid-config branch), since
 # it does not depend on config validity.
-ctx="$(mk_msg SS_HEADER "$MK_NAME")${nl}${nl}${STATE}${nl}${nl}[knowledge-health] ${HEALTH}${nl}${nl}${DOCS}${NOTES}${MISSING_TXT}${WARN_TXT}${LEFT_TXT}${WT_TXT}${RISK:+${nl}${RISK}}${WM:+${nl}${nl}${WM}}"
+ctx="$(mk_msg SS_HEADER "$MK_NAME")${nl}${nl}${STATE}${nl}${nl}[knowledge-health] ${HEALTH}${nl}${nl}${DOCS}${NOTES}${MISSING_TXT}${WARN_TXT}${LEFT_TXT}${WT_AUTO_TXT}${WT_TXT}${RISK:+${nl}${RISK}}${WM:+${nl}${nl}${WM}}"
 emit_ctx "$ctx"

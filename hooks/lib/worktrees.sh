@@ -76,16 +76,17 @@
 # Ledgers are read (bash builtins, no fork) only when there is a row.
 
 # _mk_wt_ledger_active FILE -- 0 when FILE's first `status:` line within its
-# first 60 lines says active.
+# first 60 lines says active (`Status:` too; a last line without a newline
+# counts).
 _mk_wt_ledger_active() {
   local ln k=0 v
   [ -f "$1" ] || return 1
-  while [ "$k" -lt 60 ] && IFS= read -r ln; do
+  while [ "$k" -lt 60 ] && { IFS= read -r ln || [ -n "$ln" ]; }; do
     k=$((k + 1))
     v="${ln#"${ln%%[!	 #*-]*}"}"
     case "$v" in
-      status:*)
-        v="${v#status:}"; v="${v//\*/}"
+      [Ss]tatus:*)
+        v="${v#?tatus:}"; v="${v//\*/}"
         v="${v#"${v%%[![:space:]]*}"}"
         case "$v" in active|active[[:space:]]*) return 0 ;; *) return 1 ;; esac ;;
     esac
