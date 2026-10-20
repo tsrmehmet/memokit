@@ -24,8 +24,8 @@ load helpers
   [ "$output" = "true" ]
 }
 
-@test "plugin is default-disabled (enabled per project via enabledPlugins)" {
+@test "plugin is default-enabled (a user-scope install turns it on)" {
   run jq -r '.defaultEnabled' "$MK_REPO/.claude-plugin/plugin.json"
   [ "$status" -eq 0 ]
-  [ "$output" = "false" ]
+  [ "$output" = "true" ]
 }

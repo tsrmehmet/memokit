@@ -10,7 +10,7 @@ load helpers
   [ -z "$output" ]
 }
 @test "README covers install, init, config, kill switch" {
-  for s in '/plugin marketplace add tsrmehmet/memokit' '/plugin install memokit@memokit' 'claude plugin enable memokit@memokit --scope local' '/memokit:init' 'memokit.json' 'MEMOKIT_GUARD_OFF' 'Türkçe'; do
+  for s in '/plugin marketplace add tsrmehmet/memokit' '/plugin install memokit@memokit' 'claude plugin install memokit@memokit --scope user' '/memokit:init' 'memokit.json' 'MEMOKIT_GUARD_OFF' 'Türkçe'; do
     grep -q "$s" "$MK_REPO/README.md" || { echo "missing: $s"; false; }
   done
 }
@@ -19,14 +19,14 @@ load helpers
     grep -rq "$v" "$MK_REPO/hooks" || { echo "unknown env var: $v"; false; }
   done
 }
-@test "README install is per project and warns against user-level enablement" {
+@test "README install is at user level, without the old per-project warning" {
   f="$MK_REPO/README.md"
   grep -qF 'enabledPlugins["memokit@memokit"]' "$f" || { echo "no enabledPlugins note"; false; }
-  grep -qF 'defaultEnabled' "$f" || { echo "no defaultEnabled note"; false; }
-  grep -qi 'user level' "$f" || { echo "no user-level warning"; false; }
+  grep -qF '"defaultEnabled": true' "$f" || { echo "no defaultEnabled note"; false; }
+  ! grep -qF -e 'Do not enable memokit at user level' -e '--scope local' -e 'etkinleştirmeyin' "$f" || { echo "old per-project install text left"; false; }
 }
-@test "README: MEMOKIT_NO_INIT_HINT row describes when the hint fires (M1)" {
-  row="$(grep -F '`MEMOKIT_NO_INIT_HINT=1`' "$MK_REPO/README.md")"
+@test "README: MEMOKIT_INIT_HINT row describes when the hint fires (M1)" {
+  row="$(grep -F '`MEMOKIT_INIT_HINT=1`' "$MK_REPO/README.md")"
   lacks "$row" 'once-per-session'
   printf '%s' "$row" | grep -qF 'every SessionStart' || { echo "row: $row"; false; }
   printf '%s' "$row" | grep -qF '.claude/hooks' || { echo "row: $row"; false; }

@@ -86,7 +86,7 @@
         },
         "healthScript": {
           "type": "string",
-          "description": "Repo-relative script run with --fast at session start."
+          "description": "Repo-relative script run with --fast at session start; not run when it resolves outside the project root or is a symlink."
         }
       }
     },
@@ -147,7 +147,7 @@
         "refreshScript": {
           "type": "string",
           "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$",
-          "description": "Repo-relative script that replaces the builtin refresh (run from the repo root; exit 0 = refreshed)."
+          "description": "Repo-relative script that replaces the builtin refresh (run from the repo root; exit 0 = refreshed); not run when it resolves outside the project root or is a symlink."
         }
       }
     },

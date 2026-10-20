@@ -63,13 +63,16 @@ legacy_hooks_present() {
 }
 
 if ! mk_active; then
-  # Init hint: only in a project that (a) hasn't opted out, (b) has a
-  # resolvable root, (c) is actually a git work tree, and (d) has no legacy
+  # Init hint: off by default (memokit is enabled at user level, so it would
+  # otherwise land in every repo). Only when (a) the user opted in with
+  # MEMOKIT_INIT_HINT=1 and the legacy MEMOKIT_NO_INIT_HINT=1 is not set, (b)
+  # the root resolves, (c) it is a git work tree, and (d) there is no legacy
   # .claude/hooks (at the root or the git top level) -- a project already
   # carrying a legacy hook setup gets no unsolicited suggestion. This is the
   # sole codepath that runs without an active memokit.json; everything below
   # this block requires mk_active.
-  if [ "${MEMOKIT_NO_INIT_HINT:-0}" != "1" ] && [ -n "$MK_ROOT" ] \
+  if [ "${MEMOKIT_INIT_HINT:-0}" = "1" ] && [ "${MEMOKIT_NO_INIT_HINT:-0}" != "1" ] \
+     && [ -n "$MK_ROOT" ] \
      && git -C "$MK_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
      && ! legacy_hooks_present; then
     lang="en"
@@ -122,11 +125,13 @@ fi
 # scripts/ directory of its own yet: a missing script degrades to a plain
 # note (and is recorded as a missing file, see MISSING_LIST below) instead
 # of a raw "No such file or directory" stderr line masquerading as a health
-# result.
+# result. A script outside the project root (mk_path_inside_root) is not run.
 HEALTH=""
 MISSING_LIST=""
 if [ -n "$MK_HEALTH_SCRIPT" ]; then
-  if [ -x "$MK_ROOT/$MK_HEALTH_SCRIPT" ]; then
+  if [ -x "$MK_ROOT/$MK_HEALTH_SCRIPT" ] && ! mk_path_inside_root "$MK_HEALTH_SCRIPT"; then
+    HEALTH="$(mk_msg SS_HEALTH_OUTSIDE "$MK_HEALTH_SCRIPT")"
+  elif [ -x "$MK_ROOT/$MK_HEALTH_SCRIPT" ]; then
     HEALTH="$(if cd "$MK_ROOT"; then MEMOKIT_KH_SMOKE=0 bash "$MK_HEALTH_SCRIPT" --fast 2>&1 || true; fi)"
   else
     HEALTH="$(mk_msg SS_HEALTH_SKIPPED)"

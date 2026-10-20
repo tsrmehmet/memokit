@@ -6,7 +6,7 @@ description: Set up memokit in the current project (new project) or migrate a pr
 # /memokit:init
 
 Talk to the user in their language. Script: `"${CLAUDE_PLUGIN_ROOT}/skills/init/scripts/memokit-init.sh"` (below: `$INIT`). Root: the current project root.
-memokit must be installed and enabled for this project (`claude plugin enable memokit@memokit --scope local`).
+memokit must be installed and enabled (a user-scope install, `claude plugin install memokit@memokit --scope user`, enables it for every project).
 
 ## 0. Detect
 Run `$INIT detect "$ROOT"`.

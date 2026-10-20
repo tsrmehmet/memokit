@@ -119,6 +119,21 @@ marker() { cat "$PROJ/graphify-out/.graph_commit" 2>/dev/null; }
   R_RC=3 gs refresh
   [ "$status" -eq 1 ]
 }
+@test "refreshScript under a symlinked dir that leaves the root is not run: exit 2" {
+  setup_graph "$(graph_cfg en ',"refreshScript":"scripts/r.sh"')"
+  out="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkout.XXXXXX")"
+  printf '#!/bin/sh\ntouch "%s/RAN"\n' "$out" > "$out/r.sh"
+  ln -s "$out" "$PROJ/scripts"
+  gs refresh
+  [ "$status" -eq 2 ]; [ ! -e "$out/RAN" ]; [ "$(calls)" = 0 ]
+  printf '%s' "$output" | grep -q 'outside the project root'
+}
+@test "a missing refreshScript is a failed run (exit 1), not an outside-root refusal" {
+  setup_graph "$(graph_cfg en ',"refreshScript":"scripts/r.sh"')"
+  gs refresh
+  [ "$status" -eq 1 ]; [ "$(calls)" = 0 ]
+  ! printf '%s' "$output" | grep -q 'outside the project root'
+}
 @test "subdirectory launch resolves the project root" {
   setup_graph
   export CLAUDE_PROJECT_DIR="$PROJ/src"

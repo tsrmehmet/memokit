@@ -29,7 +29,7 @@ Goal: the next session reads `docs/STATE.md` and, when the user only says "devam
 
    One row per handed-over item: unfinished work, uncommitted changes, pending subagent results, pending council syntheses, unwritten decisions from step 1. For each: can the next session start without asking? does it hide an unchosen option? was its cost/time approved by the user? Every "NO" row gets the stamp **"TALK FIRST, NO CODE" / "ÖNCE KONUŞ, KOD YAZMA"** in STATE, and its options — with costs and your recommendation — go to `docs/HISTORY.md`, referenced from STATE.
 
-4. **Enforce the ceiling.** `docs/STATE.md` ≤ 150 lines and ≤ 5 KB (`wc -l -c docs/STATE.md`). Move overflow to the end of `docs/HISTORY.md`; no handoff-table row may lose its trace. If `sessionStart.healthScript` is set in `.claude/memokit.json`, also run it with `--full`.
+4. **Enforce the ceiling.** `docs/STATE.md` ≤ 150 lines and ≤ 5 KB (`wc -l -c docs/STATE.md`). Move overflow to the end of `docs/HISTORY.md`; no handoff-table row may lose its trace. If `sessionStart.healthScript` is set in `.claude/memokit.json`, also run it with `--full`, unless the session start reported it outside the project root (then tell the user instead).
 
 5. **Durable records.** Hard-to-reverse decision → `docs/DECISIONS.md` row (date | decision | rationale | council folder). New code trap → `docs/PATTERNS.md`. Same correction from the user twice → `docs/LESSONS.md`; a third time → promote to a CLAUDE.md rule or hook. Only create these files if the project already uses them. Progress never goes to Claude memory — that is STATE's job; memory is for durable, project-wide facts only.
 

@@ -45,6 +45,10 @@ fi
 
 # --- refresh -----------------------------------------------------------------
 if [ -n "$MK_GRAPH_REFRESH_SCRIPT" ]; then
+  # A missing script keeps failing as a failed run (exit 1) below.
+  if [ -e "$MK_ROOT/$MK_GRAPH_REFRESH_SCRIPT" ] || [ -L "$MK_ROOT/$MK_GRAPH_REFRESH_SCRIPT" ]; then
+    mk_path_inside_root "$MK_GRAPH_REFRESH_SCRIPT" || { say GR_SCRIPT_OUTSIDE "$MK_GRAPH_REFRESH_SCRIPT"; exit 2; }
+  fi
   (cd "$MK_ROOT" && bash "$MK_GRAPH_REFRESH_SCRIPT"); rc=$?
   if [ "$rc" -ne 0 ]; then say GR_SCRIPT_FAILED "$MK_GRAPH_REFRESH_SCRIPT" "$rc"; exit 1; fi
   say GR_SCRIPT_OK "$MK_GRAPH_REFRESH_SCRIPT"

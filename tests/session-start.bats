@@ -1,22 +1,26 @@
 #!/usr/bin/env bats
 load helpers
 
-@test "init hint in git repo without config" {
+@test "no init hint by default" {
   mk_project none
-  LANG=tr_TR.UTF-8 run_hook session-start.sh '{}'
+  run_hook session-start.sh '{}'; [ -z "$output" ]
+}
+@test "init hint in git repo without config when opted in" {
+  mk_project none
+  LANG=tr_TR.UTF-8 MEMOKIT_INIT_HINT=1 run_hook session-start.sh '{}'
   ctx | grep -q '/memokit:init'
 }
 @test "no hint in legacy project" {
   mk_project none; mkdir -p "$PROJ/.claude/hooks"
-  run_hook session-start.sh '{}'; [ -z "$output" ]
+  MEMOKIT_INIT_HINT=1 run_hook session-start.sh '{}'; [ -z "$output" ]
 }
 @test "no hint outside git" {
   d="$(mktemp -d)"; export CLAUDE_PROJECT_DIR="$d"
-  run_hook session-start.sh '{}'; [ -z "$output" ]
+  MEMOKIT_INIT_HINT=1 run_hook session-start.sh '{}'; [ -z "$output" ]
 }
-@test "hint can be disabled" {
+@test "legacy MEMOKIT_NO_INIT_HINT=1 wins over MEMOKIT_INIT_HINT=1" {
   mk_project none
-  MEMOKIT_NO_INIT_HINT=1 run_hook session-start.sh '{}'; [ -z "$output" ]
+  MEMOKIT_INIT_HINT=1 MEMOKIT_NO_INIT_HINT=1 run_hook session-start.sh '{}'; [ -z "$output" ]
 }
 @test "injects header, STATE and resume note" {
   mk_project
@@ -30,6 +34,35 @@ load helpers
   run_hook session-start.sh '{}'; ctx | grep -q 'scripts/kh.sh'
   mkdir -p "$PROJ/scripts"; printf '#!/bin/sh\necho HEALTH-OK\n' > "$PROJ/scripts/kh.sh"; chmod +x "$PROJ/scripts/kh.sh"
   run_hook session-start.sh '{}'; ctx | grep -q 'HEALTH-OK'
+}
+mk_outside_script() {
+  out="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkout.XXXXXX")"; out="$(cd "$out" && pwd)"
+  printf '#!/bin/sh\ntouch "%s/RAN"\n' "$out" > "$out/kh.sh"; chmod +x "$out/kh.sh"
+}
+@test "health script outside the project root is not run" {
+  mk_outside_script
+  mk_project "{\"version\":1,\"project\":{\"name\":\"D\",\"tag\":\"DMO\"},\"language\":\"tr\",\"sessionStart\":{\"healthScript\":\"../$(basename "$out")/kh.sh\"}}"
+  # mk_project and the outside dir share BATS_TMPDIR, so ../<out> reaches it.
+  [ "$(dirname "$PROJ")" = "$(dirname "$out")" ]
+  run_hook session-start.sh '{}'
+  [ ! -e "$out/RAN" ]
+  ctx | grep -q 'proje kökünün dışına'
+}
+@test "health script under a symlinked dir that leaves the root is not run" {
+  mk_outside_script
+  mk_project '{"version":1,"project":{"name":"D","tag":"DMO"},"language":"tr","sessionStart":{"healthScript":"scripts/kh.sh"}}'
+  ln -s "$out" "$PROJ/scripts"
+  run_hook session-start.sh '{}'
+  [ ! -e "$out/RAN" ]
+  ctx | grep -q 'proje kökünün dışına'
+}
+@test "symlinked health script file is not run" {
+  mk_outside_script
+  mk_project '{"version":1,"project":{"name":"D","tag":"DMO"},"language":"en","sessionStart":{"healthScript":"scripts/kh.sh"}}'
+  mkdir -p "$PROJ/scripts"; ln -s "$out/kh.sh" "$PROJ/scripts/kh.sh"
+  run_hook session-start.sh '{}'
+  [ ! -e "$out/RAN" ]
+  ctx | grep -q 'outside the project root'
 }
 @test "missing docs are reported" {
   mk_project '{"version":1,"project":{"name":"D","tag":"DMO"},"language":"tr","sessionStart":{"docs":["docs/RULES.md — kurallar"]}}'

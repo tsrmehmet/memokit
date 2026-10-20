@@ -3,6 +3,10 @@ MK_REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 HOOKS="$MK_REPO/hooks"
 # Always run hooks under the OS bash so macOS CI proves 3.2 compatibility.
 MK_BASH="${MK_BASH:-/bin/bash}"
+# A developer's own memokit env (e.g. MEMOKIT_NO_INIT_HINT=1 under `env` in
+# ~/.claude/settings.json, inherited by Claude Code's shell) must not leak in.
+for _v in $(env | sed -n 's/^\(MEMOKIT_[A-Z_]*\)=.*/\1/p'); do unset "$_v"; done
+unset _v
 # Session-start auto-clean (0.6.1) starts detached jobs; tests that exercise
 # it unset this and set MEMOKIT_AUTOCLEAN_SYNC=1.
 export MEMOKIT_AUTOCLEAN_OFF=1

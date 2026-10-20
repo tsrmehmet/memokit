@@ -32,28 +32,24 @@ This is personal infrastructure shared as-is. MIT licensed, no support guarantee
 
 ## Install
 
-Install and enable memokit **per project**, from the project's root:
+Install memokit **once, at user level**:
 
 ```
 /plugin marketplace add tsrmehmet/memokit
 /plugin install memokit@memokit
 ```
 
-In the `/plugin install` dialog pick a project-local scope (from a shell: `claude plugin install memokit@memokit --scope local`, which writes `.claude/settings.local.json`; that file must be git-ignored, because a migration needs a clean working tree). The plugin manifest sets `"defaultEnabled": false`, so install alone leaves memokit disabled (`"enabledPlugins": {"memokit@memokit": false}`) and `/memokit:init` cannot run yet. Enable it for this project: in the `/plugin` menu, or from a shell:
+In the `/plugin install` dialog pick the user scope (from a shell: `claude plugin install memokit@memokit --scope user`). The plugin manifest sets `"defaultEnabled": true`, so the install leaves memokit enabled for every project. Then run `/memokit:init` in each git repository that should use it.
 
-```
-claude plugin enable memokit@memokit --scope local
-```
+memokit stays out of the way elsewhere: the hooks act only in projects that have `.claude/memokit.json`, the agents and skills (`memokit:coder`, `/memokit:resume`, …) are `memokit:`-namespaced and stop on their own when it is missing, and the "run `/memokit:init`" hint is off by default (`MEMOKIT_INIT_HINT=1` turns it on; see "Kill switches and troubleshooting"). `/memokit:init` also writes `enabledPlugins["memokit@memokit"] = true` and the marketplace into the project's `.claude/settings.json`, so the project turns memokit on for everyone who clones it.
 
-memokit stays off in every project that has not enabled it. `/memokit:init` then writes `enabledPlugins["memokit@memokit"] = true` into the project's `.claude/settings.json`, so the project turns memokit on for everyone who clones it.
-
-Do not enable memokit at user level while other projects still run their own per-repo hooks. The hooks stay silent without `.claude/memokit.json`, but the agents and skills (`memokit:coder`, `memokit:reviewer`, `/memokit:handoff`, `/memokit:resume`) would be listed next to those projects' own coder/reviewer/handoff/resume, and picking memokit's version skips the project rules that live in the legacy ones. Each of them stops on its own when `.claude/memokit.json` is missing, but that is a backstop, not the install model.
+In a repository you do not trust, look at `.claude/memokit.json` before the first session: its `sessionStart.healthScript` runs at every session start and `graph.refreshScript` at handoff. That is the same exposure as hooks in the repository's `.claude/settings.json`; memokit only refuses scripts that resolve outside the project root.
 
 Requirements: bash, jq, git; macOS or Linux.
 
 ## Quick start
 
-1. Open Claude Code in a git repository, install and enable memokit for it (see Install) and run `/memokit:init`.
+1. With memokit installed (see Install), open Claude Code in a git repository and run `/memokit:init`.
 2. It detects your stack and asks a short set of questions: project name, tag, language, guarded directories, and the docs to show at session start.
 3. It writes `.claude/memokit.json` and overlay skeletons, creates `CLAUDE.md`, `docs/STATE.md` and `docs/DECISIONS.md` from templates if they are missing (it never overwrites an existing file), and registers the marketplace and plugin in `settings.json`.
 4. Start a new session. Hooks are active only in projects that have `.claude/memokit.json`.
@@ -76,12 +72,12 @@ Requirements: bash, jq, git; macOS or Linux.
 | `contextBudget.limitTokens` | no | `300000` | Context size at which the handoff reminder starts (minimum 1000). |
 | `stateStale.maxCommitsBehind` | no | `3` | Guarded-dir commits allowed after the last `docs/STATE.md` commit. |
 | `sessionStart.docs` | no | `[]` | `"path — description"` lines shown at session start. |
-| `sessionStart.healthScript` | no | none | Repo-relative script run with `--fast` at session start. |
+| `sessionStart.healthScript` | no | none | Repo-relative script run with `--fast` at session start. Not run when it resolves outside the project root or is a symlink. |
 | `hints.builtin` | no | all | Any of `debugging`, `decision`, `review`, `handoff`, `resume`, `graphify`. |
 | `hints.custom[]` | no | `[]` | `{ "match": "<regex>", "text": "<hint>" }` project-specific keyword hints. |
 | `graph.root` | no | none | Enables the code graph (see below): repo-relative directory the graph covers (`.` = whole repo). |
 | `graph.maxCommitsBehind` | no | `20` | Commits under `graph.root` since the last refresh before the codebase-question hint says "refresh first". |
-| `graph.refreshScript` | no | none | Repo-relative script that replaces the builtin refresh (run from the repo root; exit 0 = refreshed). |
+| `graph.refreshScript` | no | none | Repo-relative script that replaces the builtin refresh (run from the repo root; exit 0 = refreshed). Not run when it resolves outside the project root or is a symlink. |
 | `scratch.agentMaxMB` | no | `1024` | New data (MB) a subagent may leave in the scratchpad before the SubagentStop gate blocks it. |
 | `scratch.staleAfterHours` | no | `24` | Age after which a temp entry of an earlier session counts as stale. |
 | `scratch.reportMinMB` | no | `500` | Stale temp size (MB) from which SessionStart reports leftovers. |
@@ -178,7 +174,7 @@ The reminder fires once when the budget is crossed and again every step of token
 
 ## Kill switches and troubleshooting
 
-Hooks read these from their environment, so set them in `.claude/settings.local.json` under `env`, or export them before launching `claude`. Exporting inside a Bash tool call does not reach the hooks.
+Hooks read these from their environment, so set them in `.claude/settings.local.json` under `env` (one that should apply in every repository, such as `MEMOKIT_INIT_HINT`, under `env` in `~/.claude/settings.json`), or export them before launching `claude`. Exporting inside a Bash tool call does not reach the hooks.
 
 ```json
 { "env": { "MEMOKIT_GUARD_OFF": "1" } }
@@ -194,7 +190,7 @@ Hooks read these from their environment, so set them in `.claude/settings.local.
 | `MEMOKIT_DISK_OFF=1` | Disables the disk watch (drop warning, free-space floor, Stop message). |
 | `MEMOKIT_AUTOCLEAN_OFF=1` | Disables the session-start auto-clean of stale temp entries and merged, clean leftover worktrees; they are only reported. |
 | `MEMOKIT_TEMP_ROOT=<dir>` | Testing override of the temp root memokit inspects; for tests, do not set it in a real session. |
-| `MEMOKIT_NO_INIT_HINT=1` | Silences the "run `/memokit:init`" hint. Without it the hint is added on every SessionStart (startup, resume, clear, compact) in a git work tree that has no `.claude/memokit.json` and no legacy `.claude/hooks/`. |
+| `MEMOKIT_INIT_HINT=1` | Turns on the "run `/memokit:init`" hint (off by default since 0.6.2). With it the hint is added on every SessionStart (startup, resume, clear, compact) in a git work tree that has no `.claude/memokit.json` and no legacy `.claude/hooks/`. The pre-0.6.2 `MEMOKIT_NO_INIT_HINT=1` still silences it and wins over `MEMOKIT_INIT_HINT=1`. |
 | `MEMOKIT_HOOK_DEBUG=1` | Each hook dumps the payload it received to `$TMPDIR/memokit-<hash>-hook-<name>.json` (`/tmp` if `TMPDIR` is unset). |
 
 Troubleshooting:
@@ -250,16 +246,16 @@ Limitations: matching is on the command text only. A command name that exists on
 
 memokit, Claude Code için bir çalışma modeli plugin'idir: ana oturum (orkestratör) üretim kodu yazmaz, kodu bir Sonnet alt ajanı (`memokit:coder`) yazar, her dilimi bir Opus gözden geçirici (`memokit:reviewer`) onaylar. Oturum ritüelleri `docs/STATE.md` dosyasını güncel tutar; bağlam bütçesi aşılınca yapay zekâ kendi kararıyla ölçülü bir handoff yapar.
 
-memokit'i **proje başına** kurup etkinleştirin (projenin kök dizininde):
+memokit'i **bir kez, kullanıcı düzeyinde** kurun:
 
 ```
 /plugin marketplace add tsrmehmet/memokit
 /plugin install memokit@memokit
 ```
 
-`/plugin install` penceresinde projeye özel bir kapsam seçin (kabukta: `claude plugin install memokit@memokit --scope local`). Manifest `"defaultEnabled": false` ayarladığı için kurulum tek başına yetmez, plugin kapalı kurulur ve `/memokit:init` çalışmaz. Projede etkinleştirin: `/plugin` menüsünden ya da kabukta `claude plugin enable memokit@memokit --scope local`. Etkinleştirilmemiş projelerde memokit kapalı kalır. `/memokit:init`, projenin `.claude/settings.json` dosyasına `enabledPlugins["memokit@memokit"] = true` yazar. Başka projeler hâlâ kendi depo-içi hook'larıyla çalışırken memokit'i kullanıcı düzeyinde (user level) etkinleştirmeyin: memokit'in ajan ve skill'leri o projelerin kendi coder/reviewer/handoff/resume'u ile yan yana görünür.
+`/plugin install` penceresinde kullanıcı kapsamını seçin (kabukta: `claude plugin install memokit@memokit --scope user`). Manifest `"defaultEnabled": true` ayarladığı için kurulumla birlikte memokit her projede etkin olur. `.claude/memokit.json` olmayan projelerde hook'lar sessiz kalır, `memokit:` önekli ajan ve skill'ler kendiliğinden durur; "`/memokit:init` çalıştırın" ipucu varsayılan olarak kapalıdır (`MEMOKIT_INIT_HINT=1` açar). `/memokit:init`, projenin `.claude/settings.json` dosyasına `enabledPlugins["memokit@memokit"] = true` yazar; projeyi klonlayan herkeste memokit açılır. Güvenmediğiniz bir depoda ilk oturumdan önce `.claude/memokit.json` dosyasına bakın: `sessionStart.healthScript` her oturum başında, `graph.refreshScript` handoff'ta çalışır (deponun `.claude/settings.json` hook'larıyla aynı risk; memokit yalnız proje kökünün dışına çıkan betikleri reddeder).
 
-Ardından git deposunda `/memokit:init` çalıştırın; proje adı, etiket, dil, korunan klasörleri ve kod grafiğini (graphify) sorar, `.claude/memokit.json` dosyasını yazar. `graph` ayarlıysa her handoff kod grafiğini tazeler (yalnız kod, LLM yok); handoff'un son adımı telefonuna bildirim gönderir (Remote Control bağlıyken). Türkçe yanıt ve hook mesajları için `memokit.json` içinde `"language": "tr"` ayarlayın. Acil durumda korumaları kapatmak için `MEMOKIT_GUARD_OFF=1` değerini `.claude/settings.local.json` içindeki `env` bölümüne yazın ya da `claude`'u başlatmadan önce dışa aktarın. Kişisel bir altyapıdır, olduğu gibi paylaşılır; destek garantisi yoktur. Yıkıcı komutlar (force push, reset --hard, özyinelemeli rm, yıkıcı SQL, kubectl/helm delete ve projenin `careful.patterns` kalıpları) engellenir; onay için bir sonraki mesajınıza `onay <kod>` ile başlayın. Bu bir kaza önleme korkuluğudur, sandbox değildir: yalnızca komut metnine bakar. 64 KiB'tan uzun (ya da 1000'den fazla rm komutu içeren) bir komut denetlenmez, `too-large` olarak engellenir; uzun dosyaları Write aracıyla yazın ya da onay kodu verin. Kırmızı ve flaky testler için `/memokit:triage`.
+Ardından memokit'i kullanacağınız git deposunda `/memokit:init` çalıştırın; proje adı, etiket, dil, korunan klasörleri ve kod grafiğini (graphify) sorar, `.claude/memokit.json` dosyasını yazar. `graph` ayarlıysa her handoff kod grafiğini tazeler (yalnız kod, LLM yok); handoff'un son adımı telefonuna bildirim gönderir (Remote Control bağlıyken). Türkçe yanıt ve hook mesajları için `memokit.json` içinde `"language": "tr"` ayarlayın. Acil durumda korumaları kapatmak için `MEMOKIT_GUARD_OFF=1` değerini `.claude/settings.local.json` içindeki `env` bölümüne yazın ya da `claude`'u başlatmadan önce dışa aktarın. Kişisel bir altyapıdır, olduğu gibi paylaşılır; destek garantisi yoktur. Yıkıcı komutlar (force push, reset --hard, özyinelemeli rm, yıkıcı SQL, kubectl/helm delete ve projenin `careful.patterns` kalıpları) engellenir; onay için bir sonraki mesajınıza `onay <kod>` ile başlayın. Bu bir kaza önleme korkuluğudur, sandbox değildir: yalnızca komut metnine bakar. 64 KiB'tan uzun (ya da 1000'den fazla rm komutu içeren) bir komut denetlenmez, `too-large` olarak engellenir; uzun dosyaları Write aracıyla yazın ya da onay kodu verin. Kırmızı ve flaky testler için `/memokit:triage`.
 
 Birden çok bağımsız görev için `/memokit:parallel`: her şerit (lane) kendi git worktree'sinde çalışır (aynı deponun, kendi dalı ve dosyaları olan ayrı bir çalışma klasörü; şeritler birbirinin dosyasının üzerine yazamaz). Akış: analiz → plan onayı → öngörülen tüm kararlar tek seferde sorulur → en fazla `parallel.maxCoders` şerit aynı anda → riske göre gözden geçirme (`high` Opus, `normal` Sonnet; `review.model`) → sırayla birleştirme → worktree ve dalın hemen temizlenmesi → Opus ile tüm batch'in gözden geçirilmesi → Tier 2 sorusu. Testler iki katmanlıdır (WORKING-MODEL.md §9): Tier 1 (build + birim testleri + dilimin yeni testleri) her dilimde; ağır kapılar (Tier 2) batch başına bir kez ve yalnız kullanıcı onaylarsa. Komutlar `.claude/memokit/gates.md` dosyasındadır. Koşunun durumu git'e girmeyen yerel bir ledger dosyasında tutulur, handoff ve resume onu sürdürür. Artakalan worktree ve `mk/*` dalları oturum başında raporlanır; 0.6.1'den beri birleşmiş, temiz ve `scratch.staleAfterHours` boyunca kullanılmamış olanlar ile önceki oturumların eski temp dosyaları arka planda otomatik silinir (`MEMOKIT_AUTOCLEAN_OFF=1` kapatır); geri kalanları `/memokit:sweep worktrees` onayınla siler, birleşmemiş ya da değişiklik içeren iş hiçbir zaman otomatik silinmez; etkin bir koşunun (ledger `status: active`) şeritleri artakalan sayılmaz, oturum başı o koşuyu adıyla anar. `git worktree remove --force` bir onay kodu ister (`git-worktree-force`).
 

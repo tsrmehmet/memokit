@@ -54,6 +54,20 @@ mk_resolve_root() {
 
 mk_active() { [ -n "$MK_ROOT" ] && [ -f "$MK_CONFIG" ]; }
 
+# mk_path_inside_root <repo-relative path>: true when the path's directory,
+# resolved physically (so "../" and symlinked directories count), is below
+# MK_ROOT and the file itself is not a symlink. Guards the scripts memokit.json
+# names (healthScript, graph.refreshScript): memokit is enabled at user level,
+# so a cloned repo's config must not point it at a file elsewhere.
+mk_path_inside_root() {
+  local rootp dirp
+  [ -L "$MK_ROOT/$1" ] && return 1
+  rootp="$(CDPATH='' cd -- "$MK_ROOT" && pwd -P)" || return 1
+  dirp="$(CDPATH='' cd -- "$MK_ROOT" && CDPATH='' cd -- "$(dirname -- "$1")" 2>/dev/null && pwd -P)" || return 1
+  case "$dirp/" in "$rootp"/*) return 0 ;; esac
+  return 1
+}
+
 mk_lang_guess() {
   if grep -Eq '"language"[[:space:]]*:[[:space:]]*"tr"' "$MK_CONFIG" 2>/dev/null; then
     printf 'tr'
