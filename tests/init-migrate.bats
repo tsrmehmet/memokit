@@ -1,15 +1,6 @@
 #!/usr/bin/env bats
 load helpers
 INIT() { "$MK_BASH" "$MK_REPO/skills/init/scripts/memokit-init.sh" "$@"; }
-legacy_project() {
-  mk_project none; mkdir -p "$PROJ/.claude/hooks" "$PROJ/.claude/agents" "$PROJ/.claude/skills/handoff"
-  cp "$MK_REPO"/tests/fixtures/legacy/*.sh "$PROJ/.claude/hooks/"
-  printf 'x' > "$PROJ/.claude/agents/coder.md"; printf 'x' > "$PROJ/.claude/skills/handoff/SKILL.md"
-  printf '%s' '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR/.claude/hooks/check-state-stale.sh\""}]}]}}' > "$PROJ/.claude/settings.json"
-  git -C "$PROJ" -c user.email=t@t -c user.name=t add -A; git -C "$PROJ" -c user.email=t@t -c user.name=t commit -qm legacy
-  # extract-legacy compares vendored skills against $HOME/.claude/skills: never the real one.
-  export HOME="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkhome.XXXXXX")"
-}
 @test "extract-legacy proposal" {
   legacy_project
   run INIT extract-legacy "$PROJ"; [ "$status" -eq 0 ]
@@ -66,7 +57,7 @@ legacy_project() {
   run INIT remove-legacy "$PROJ"; [ "$status" -eq 0 ]
   [ ! -d "$PROJ/.claude/hooks" ]; [ ! -f "$PROJ/.claude/agents/coder.md" ]; [ ! -d "$PROJ/.claude/skills/handoff" ]
   jq -e '(.hooks // {}) | length == 0' "$PROJ/.claude/settings.json"
-  jq -e '.enabledPlugins["memokit@memokit"]' "$PROJ/.claude/settings.json"
+  jq -e '.enabledPlugins == null and .extraKnownMarketplaces == null' "$PROJ/.claude/settings.json"   # registration is the Team opt-in"
   [ "$(git -C "$PROJ" rev-parse HEAD)" = "$head_before" ]   # nothing committed by the script
 }
 @test "documented migration sequence completes end to end (SKILL.md steps 1-6)" {
@@ -92,7 +83,7 @@ legacy_project() {
   [ ! -d "$PROJ/.claude/hooks" ]; [ ! -f "$PROJ/.claude/agents/coder.md" ]; [ ! -d "$PROJ/.claude/skills/handoff" ]
   [ -f "$PROJ/.claude/memokit.json" ]; [ -f "$PROJ/.claude/memokit/rules.md" ]; [ -f "$PROJ/.claude/memokit/handoff.md" ]
   grep -q 'See WORKING-MODEL.md.' "$PROJ/CLAUDE.md"
-  jq -e '.enabledPlugins["memokit@memokit"]' "$PROJ/.claude/settings.json"
+  jq -e '.enabledPlugins == null and .extraKnownMarketplaces == null' "$PROJ/.claude/settings.json"   # registration is the Team opt-in"
   [ "$(git -C "$PROJ" rev-parse HEAD)" = "$head_before" ]   # nothing committed by the script
 }
 @test "extract-legacy: multi-line RULES with escaped single quote" {

@@ -462,3 +462,49 @@ has_all() { local f="$1" s; shift; for s in "$@"; do grep -qF -- "$s" "$f" || { 
   done
   grep -qF 'reviewers their `Overlay read:` line and their verdict line' "$PAR"
 }
+@test "init adopt: routing on aiSetup, inventory, remove and drop-hook named" {
+  f="$MK_REPO/skills/init/SKILL.md"
+  has_all "$f" 'aiSetup' '$INIT inventory' '$INIT remove "$ROOT"' '--drop-hook' 'Adopt mode'
+}
+@test "init adopt: AGENTS.md never edited, imported with an override section" {
+  f="$MK_REPO/skills/init/SKILL.md"
+  has_all "$f" '@AGENTS.md' 'never edit it (root or nested)' 'override'
+}
+@test "init adopt: other tools stay byte-identical; copies name their source" {
+  f="$MK_REPO/skills/init/SKILL.md"
+  has_all "$f" 'byte-identical' '(source: '
+}
+@test "init adopt: no keep option for conflicts; cancel leaves nothing written" {
+  f="$MK_REPO/skills/init/SKILL.md"
+  has_all "$f" 'cancel' 'no keep option'
+}
+@test "init adopt: one commit with the adopt message, verify kept paths first" {
+  f="$MK_REPO/skills/init/SKILL.md"
+  has_all "$f" 'chore(ai): adopt existing AI setup into memokit' 'git status --porcelain'
+}
+@test "init adopt: scoped rules go to .claude/rules with paths" {
+  f="$MK_REPO/skills/init/SKILL.md"
+  has_all "$f" '.claude/rules/' 'paths:'
+}
+@test "init adopt: legacy order - remove-legacy before settings --drop-hook in the write step" {
+  f="$MK_REPO/skills/init/SKILL.md"
+  a="$(line_of "$f" '`$INIT remove-legacy "$ROOT"` now, before any `settings`')"; d="$(line_of "$f" '`$INIT settings "$ROOT"` with one `--drop-hook')"
+  [ -n "$a" ] && [ -n "$d" ] && [ "$a" -lt "$d" ]
+}
+@test "init adopt: legacy routing keyed on inventory .legacy != null; inventoryError and wrapper note" {
+  f="$MK_REPO/skills/init/SKILL.md"
+  has_all "$f" 'inventoryError:true' 'read the `command` itself'
+  l="$(line_of "$MK_REPO/skills/init/SKILL.md" '3. With legacy hooks (`inventory .legacy != null`): `$INIT remove-legacy')"; [ -n "$l" ]
+  l="$(line_of "$MK_REPO/skills/init/SKILL.md" '### When memokit legacy hooks are present (`inventory .legacy != null`)')"; [ -n "$l" ]
+}
+@test "init adopt: final-review wording (legacy edit order, ignored settings, prompt hooks, link mechanics)" {
+  f="$MK_REPO/skills/init/SKILL.md"
+  has_all "$f" 'happen after 7.3' 'stop and report, write nothing more' 'settingsIgnored' 'drop it yourself; not revertable' \
+    "pass the hook's full \`command\` as the substring" 'dropped N hook entries' 'command: null' 'remove it by hand' \
+    '$INIT remove "$ROOT" CLAUDE.md' 'except the AGENTS.md override line' 'hooks alone can make `aiSetup` true' 'knowledge-health is run, not removed'
+  ! grep -qF 'ask whether to remove those copies' "$f"
+}
+@test "init: plugin registration in shared settings.json is a Team opt-in" {
+  f="$MK_REPO/skills/init/SKILL.md"
+  has_all "$f" 'Team — always ask' 'Recommend **no**' 'not pinned to a version' 'Only if the user said yes to Team: `$INIT settings "$ROOT"`' 'The `--drop-*` forms never register the plugin' 'Artifact, Team)'
+}

@@ -105,3 +105,14 @@ mk_blob() {
   mkdir -p "$(dirname "$1")"
   dd if=/dev/zero of="$1" bs=1024 count="$2" 2>/dev/null
 }
+
+# A project carrying legacy per-repo hooks (shared by migrate and inventory tests).
+legacy_project() {
+  mk_project none; mkdir -p "$PROJ/.claude/hooks" "$PROJ/.claude/agents" "$PROJ/.claude/skills/handoff"
+  cp "$MK_REPO"/tests/fixtures/legacy/*.sh "$PROJ/.claude/hooks/"
+  printf 'x' > "$PROJ/.claude/agents/coder.md"; printf 'x' > "$PROJ/.claude/skills/handoff/SKILL.md"
+  printf '%s' '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR/.claude/hooks/check-state-stale.sh\""}]}]}}' > "$PROJ/.claude/settings.json"
+  git -C "$PROJ" -c user.email=t@t -c user.name=t add -A; git -C "$PROJ" -c user.email=t@t -c user.name=t commit -qm legacy
+  # extract-legacy compares vendored skills against $HOME/.claude/skills: never the real one.
+  export HOME="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkhome.XXXXXX")"
+}

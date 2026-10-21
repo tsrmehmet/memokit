@@ -9,6 +9,41 @@ INIT() { "$MK_BASH" "$MK_REPO/skills/init/scripts/memokit-init.sh" "$@"; }
   printf '%s' "$output" | jq -e '.git and (.configured|not) and (.stack|index("dotnet")) and (.stack|index("node"))'
 }
 @test "detect: legacy" { mk_project none; mkdir -p "$PROJ/.claude/hooks"; run INIT detect "$PROJ"; printf '%s' "$output" | jq -e '.legacy'; }
+@test "detect: aiSetup false for a bare repo and for framework/personal/aux-only repos" {
+  mk_project none
+  run INIT detect "$PROJ"; printf '%s' "$output" | jq -e '.aiSetup == false and .sources == 0'
+  for f in docs/superpowers/plans/p.md CLAUDE.local.md .mcp.json; do
+    mk_project none; mkdir -p "$PROJ/$(dirname "$f")"; printf 'x\n' > "$PROJ/$f"
+    run INIT detect "$PROJ"; printf '%s' "$output" | jq -e '.aiSetup == false and .sources == 0'
+  done
+}
+@test "detect: aiSetup true for a lone CLAUDE.md, an AGENTS.md, a Cursor rule, legacy hooks" {
+  mk_project none; printf 'x\n' > "$PROJ/CLAUDE.md"
+  run INIT detect "$PROJ"; printf '%s' "$output" | jq -e '.aiSetup == true and .sources == 1'
+  for f in AGENTS.md .cursor/rules/a.mdc .claude/hooks/x.sh; do
+    mk_project none; mkdir -p "$PROJ/$(dirname "$f")"; printf 'x\n' > "$PROJ/$f"
+    run INIT detect "$PROJ"; printf '%s' "$output" | jq -e '.aiSetup == true and .sources >= 1'
+  done
+}
+@test "detect: aiSetup survives non-git and invalid settings.json" {
+  d="$(mktemp -d)"; printf 'x\n' > "$d/CLAUDE.md"
+  run INIT detect "$d"; [ "$status" -eq 0 ]; printf '%s' "$output" | jq -e '.git == false and .aiSetup == true'
+  mk_project none; printf '{bad' > "$PROJ/.claude/settings.json"
+  run INIT detect "$PROJ"; [ "$status" -eq 0 ]; printf '%s' "$output" | jq -e 'has("aiSetup") and has("sources")'
+}
+@test "detect: inventoryError is false when inventory runs (true only on garbled output)" {
+  mk_project none
+  run INIT detect "$PROJ"; printf '%s' "$output" | jq -e '.inventoryError == false'
+  printf 'x\n' > "$PROJ/CLAUDE.md"
+  run INIT detect "$PROJ"; printf '%s' "$output" | jq -e '.inventoryError == false and .aiSetup == true'
+}
+@test "detect: inventoryError true when inventory cannot run" {
+  run INIT detect /nonexistent-dir-memokit; printf '%s' "$output" | jq -e '.inventoryError == true and .aiSetup == false'
+  [ "$(id -u)" -ne 0 ] || skip "root ignores file modes"
+  d="$(mktemp -d)"; printf 'x\n' > "$d/AGENTS.md"; chmod 000 "$d/AGENTS.md"
+  run INIT detect "$d"; chmod 600 "$d/AGENTS.md"
+  printf '%s' "$output" | jq -e '.inventoryError == true and .aiSetup == false'
+}
 @test "write-config validates and refuses overwrite" {
   mk_project none; f="$(mktemp)"; printf '%s' "$DEFAULT_CONFIG" > "$f"
   run INIT write-config "$PROJ" "$f"; [ "$status" -eq 0 ]; jq -e '.project.tag == "DMO"' "$PROJ/.claude/memokit.json"
@@ -40,8 +75,7 @@ INIT() { "$MK_BASH" "$MK_REPO/skills/init/scripts/memokit-init.sh" "$@"; }
   printf '%s' '{"permissions":{"allow":["Bash(git status)"]},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR/.claude/hooks/x.sh\""}]}],"Notification":[{"hooks":[{"type":"command","command":"say hi"}]}]}}' > "$PROJ/.claude/settings.json"
   run INIT settings "$PROJ" --drop-legacy-hooks; [ "$status" -eq 0 ]
   jq -e '.permissions.allow[0] == "Bash(git status)"' "$PROJ/.claude/settings.json"
-  jq -e '.enabledPlugins["memokit@memokit"] == true' "$PROJ/.claude/settings.json"
-  jq -e '.extraKnownMarketplaces.memokit.source.repo == "tsrmehmet/memokit"' "$PROJ/.claude/settings.json"
+  jq -e '.enabledPlugins == null and .extraKnownMarketplaces == null' "$PROJ/.claude/settings.json"   # drop never registers
   jq -e '(.hooks.Stop // []) | length == 0' "$PROJ/.claude/settings.json"
   jq -e '.hooks.Notification | length == 1' "$PROJ/.claude/settings.json"
 }
@@ -49,6 +83,12 @@ INIT() { "$MK_BASH" "$MK_REPO/skills/init/scripts/memokit-init.sh" "$@"; }
   mk_project none
   run INIT settings "$PROJ"; [ "$status" -eq 0 ]
   jq -e '.enabledPlugins["memokit@memokit"] == true' "$PROJ/.claude/settings.json"
+  jq -e '.extraKnownMarketplaces.memokit.source.repo == "tsrmehmet/memokit"' "$PROJ/.claude/settings.json"
+}
+@test "settings --drop-legacy-hooks without settings.json creates nothing" {
+  mk_project none
+  run INIT settings "$PROJ" --drop-legacy-hooks; [ "$status" -eq 0 ]
+  [ ! -e "$PROJ/.claude/settings.json" ]
 }
 
 # --- name substitution safety (sed metacharacters) ---
@@ -124,4 +164,123 @@ INIT() { "$MK_BASH" "$MK_REPO/skills/init/scripts/memokit-init.sh" "$@"; }
   ! grep -qs 'settings.local.json' "$PROJ/.gitignore"
   run INIT deny-tools; [ "$status" -eq 2 ]
   run INIT deny-tools "$PROJ/nope" Artifact; [ "$status" -eq 2 ]
+}
+
+GITC() { git -C "$PROJ" -c user.name=t -c user.email=t@t "$@"; }
+
+@test "remove: stages tracked paths, never commits" {
+  mk_project none
+  mkdir -p "$PROJ/.claude/agents" "$PROJ/.claude/commands"
+  printf a > "$PROJ/.claude/agents/dev.md"; printf b > "$PROJ/.claude/commands/x.md"
+  GITC add -A; GITC commit -q -m files
+  head_before="$(git -C "$PROJ" rev-parse HEAD)"
+  run INIT remove "$PROJ" .claude/agents/dev.md .claude/commands/x.md; [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -qx 'removed .claude/agents/dev.md'
+  printf '%s' "$output" | grep -qx 'removed .claude/commands/x.md'
+  [ ! -e "$PROJ/.claude/agents/dev.md" ] && [ ! -e "$PROJ/.claude/commands/x.md" ]
+  staged="$(git -C "$PROJ" diff --cached --name-only)"
+  printf '%s' "$staged" | grep -qx '.claude/agents/dev.md'
+  printf '%s' "$staged" | grep -qx '.claude/commands/x.md'
+  [ "$(git -C "$PROJ" rev-parse HEAD)" = "$head_before" ]
+}
+@test "remove: all-or-nothing on a dirty path" {
+  mk_project none
+  mkdir -p "$PROJ/.claude/agents"
+  printf a > "$PROJ/.claude/agents/a.md"; printf b > "$PROJ/.claude/agents/b.md"
+  GITC add -A; GITC commit -q -m files
+  printf changed > "$PROJ/.claude/agents/b.md"
+  run INIT remove "$PROJ" .claude/agents/a.md .claude/agents/b.md; [ "$status" -eq 4 ]
+  printf '%s' "$output" | grep -q '.claude/agents/b.md'
+  [ -f "$PROJ/.claude/agents/a.md" ] && [ -f "$PROJ/.claude/agents/b.md" ]
+  [ -z "$(git -C "$PROJ" diff --cached --name-only)" ]
+}
+@test "remove: refuses untracked, outside-root and missing paths" {
+  mk_project none
+  mkdir -p "$PROJ/.claude/agents"
+  printf a > "$PROJ/.claude/agents/a.md"; GITC add -A; GITC commit -q -m files
+  printf u > "$PROJ/untracked.md"
+  run INIT remove "$PROJ" .claude/agents/a.md untracked.md; [ "$status" -eq 4 ]
+  for bad in ../x /etc/passwd a/../../x missing.md . ./ .claude/. ./.; do
+    run INIT remove "$PROJ" .claude/agents/a.md "$bad"; [ "$status" -eq 2 ]
+  done
+  run INIT remove "$PROJ"; [ "$status" -eq 2 ]
+  run INIT remove "$PROJ/nope" x; [ "$status" -eq 2 ]
+  [ -f "$PROJ/.claude/agents/a.md" ] && [ -f "$PROJ/untracked.md" ]
+  [ -z "$(git -C "$PROJ" diff --cached --name-only)" ]
+}
+@test "remove: path with spaces" {
+  mk_project none
+  mkdir -p "$PROJ/.claude/agents"
+  printf a > "$PROJ/.claude/agents/my agent.md"; GITC add -A; GITC commit -q -m files
+  run INIT remove "$PROJ" ".claude/agents/my agent.md"; [ "$status" -eq 0 ]
+  [ ! -e "$PROJ/.claude/agents/my agent.md" ]
+}
+@test "remove: overlapping and duplicate paths are removed atomically" {
+  mk_project none
+  mkdir -p "$PROJ/.claude/agents"
+  printf a > "$PROJ/.claude/agents/dev.md"; printf b > "$PROJ/x.md"; GITC add -A; GITC commit -q -m files
+  run INIT remove "$PROJ" .claude/agents .claude/agents/dev.md x.md x.md; [ "$status" -eq 0 ]
+  [ ! -e "$PROJ/.claude/agents/dev.md" ] && [ ! -e "$PROJ/x.md" ]
+  [ -z "$(git -C "$PROJ" diff --name-only)" ]
+}
+@test "remove: glob characters in names are literal" {
+  mk_project none
+  printf a > "$PROJ/a.md"; printf b > "$PROJ/b.md"; GITC add -A; GITC commit -q -m files
+  run INIT remove "$PROJ" '*.md'; [ "$status" -eq 2 ]
+  [ -f "$PROJ/a.md" ] && [ -f "$PROJ/b.md" ]
+}
+
+@test "settings --drop-hook removes one entry and keeps the rest" {
+  mk_project none; mkdir -p "$PROJ/.claude"
+  printf '%s' '{"permissions":{"allow":["Bash(ls)"]},"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"bash scripts/remind.sh"}]}],"PostToolUse":[{"matcher":"Edit","hooks":[{"type":"command","command":"prettier --write"}]}]}}' > "$PROJ/.claude/settings.json"
+  run INIT settings "$PROJ" --drop-hook UserPromptSubmit remind.sh; [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'dropped 1 hook entries'
+  jq -e '.hooks.UserPromptSubmit == null' "$PROJ/.claude/settings.json"
+  jq -e '.hooks.PostToolUse[0].hooks[0].command | contains("prettier")' "$PROJ/.claude/settings.json"
+  jq -e '.permissions == {"allow":["Bash(ls)"]}' "$PROJ/.claude/settings.json"
+  jq -e '.enabledPlugins == null and .extraKnownMarketplaces == null' "$PROJ/.claude/settings.json"   # drop never registers
+}
+@test "settings --drop-hook with no match exits 3 and writes nothing" {
+  mk_project none; mkdir -p "$PROJ/.claude"
+  printf '%s' '{"hooks":{"PostToolUse":[{"hooks":[{"type":"command","command":"prettier"}]}]}}' > "$PROJ/.claude/settings.json"
+  cp "$PROJ/.claude/settings.json" "$BATS_TEST_TMPDIR/before.json"
+  run INIT settings "$PROJ" --drop-hook PostToolUse prettier --drop-hook UserPromptSubmit nope; [ "$status" -eq 3 ]
+  printf '%s' "$output" | grep -q 'UserPromptSubmit'
+  cmp "$PROJ/.claude/settings.json" "$BATS_TEST_TMPDIR/before.json"
+}
+@test "settings --drop-hook repeated pairs and missing argument" {
+  mk_project none; mkdir -p "$PROJ/.claude"
+  printf '%s' '{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"a.sh"}]}],"Stop":[{"hooks":[{"type":"command","command":"b.sh"},{"type":"command","command":"keep.sh"}]}]}}' > "$PROJ/.claude/settings.json"
+  run INIT settings "$PROJ" --drop-hook UserPromptSubmit a.sh --drop-hook Stop b.sh; [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'dropped 2 hook entries'
+  jq -e '(.hooks | keys) == ["Stop"] and (.hooks.Stop[0].hooks | length) == 1' "$PROJ/.claude/settings.json"
+  run INIT settings "$PROJ" --drop-hook Stop; [ "$status" -eq 2 ]
+}
+
+@test "settings --drop-hook rejects empty args and spares non-command hooks" {
+  mk_project none; mkdir -p "$PROJ/.claude"
+  printf '%s' '{"hooks":{"Stop":[{"hooks":[{"type":"prompt","prompt":"p"},{"type":"command","command":"keep.sh"},{"type":"command","command":"x.sh"}]},{"matcher":"M"}]}}' > "$PROJ/.claude/settings.json"
+  cp "$PROJ/.claude/settings.json" "$BATS_TEST_TMPDIR/before.json"
+  run INIT settings "$PROJ" --drop-hook Stop ""; [ "$status" -eq 2 ]
+  run INIT settings "$PROJ" --drop-hook "" x.sh; [ "$status" -eq 2 ]
+  cmp "$PROJ/.claude/settings.json" "$BATS_TEST_TMPDIR/before.json"
+  run INIT settings "$PROJ" --drop-hook Stop x.sh; [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'dropped 1 hook entries'
+  jq -e '.hooks.Stop[0].hooks | length == 2 and .[0].type == "prompt"' "$PROJ/.claude/settings.json"
+}
+@test "settings rejects combining --drop-legacy-hooks and --drop-hook" {
+  mk_project none; mkdir -p "$PROJ/.claude"; printf '{}' > "$PROJ/.claude/settings.json"
+  run INIT settings "$PROJ" --drop-legacy-hooks --drop-hook Stop x; [ "$status" -eq 2 ]
+  run INIT settings "$PROJ" --drop-hook Stop x --drop-legacy-hooks; [ "$status" -eq 2 ]
+  run INIT settings "$PROJ" --drop-legacy-hooks extra; [ "$status" -eq 2 ]
+  [ "$(cat "$PROJ/.claude/settings.json")" = "{}" ]
+}
+
+@test "remove: refuses the project root itself and never stages anything" {
+  mk_project none
+  printf a > "$PROJ/a.md"; GITC add -A; GITC commit -q -m files
+  for bad in . ./ .///; do
+    run INIT remove "$PROJ" "$bad"; [ "$status" -eq 2 ]
+  done
+  [ -z "$(git -C "$PROJ" diff --cached --name-only)" ]
 }
