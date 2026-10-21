@@ -44,11 +44,11 @@ EOF
 }
 
 # mk_detect_stack ROOT -- space-separated stack ids found under ROOT
-# (depth <= 3, ignoring node_modules/.git/bin/obj).
+# (depth <= 3, ignoring node_modules/vendor/.git/bin/obj).
 mk_detect_stack() {
   local root="$1" files result=""
   files="$(find "$root" -maxdepth 3 \
-    \( -name node_modules -o -name .git -o -name bin -o -name obj \) -prune \
+    \( -name node_modules -o -name vendor -o -name .git -o -name bin -o -name obj \) -prune \
     -o -type f -print 2>/dev/null || true)"
   if mk_stack_has "$files" '*.sln' '*.csproj'; then result="$result dotnet"; fi
   if mk_stack_has "$files" 'package.json'; then result="$result node"; fi
@@ -56,14 +56,36 @@ mk_detect_stack() {
   if mk_stack_has "$files" 'pyproject.toml' 'requirements.txt'; then result="$result python"; fi
   if mk_stack_has "$files" 'Cargo.toml'; then result="$result rust"; fi
   if mk_stack_has "$files" 'pom.xml' 'build.gradle*'; then result="$result jvm"; fi
+  if mk_stack_has "$files" 'composer.json'; then result="$result php"; fi
   printf '%s' "$result"
+}
+
+# mk_detect_docs_site ROOT -- the site generator that publishes ROOT/docs/,
+# where memokit keeps STATE.md, DECISIONS.md and HISTORY.md; empty if none.
+mk_detect_docs_site() {
+  local root="$1" f dir
+  for f in "$root/mkdocs.yml" "$root/mkdocs.yaml"; do
+    [ -f "$f" ] || continue
+    dir="$(sed -n 's/^docs_dir:[[:space:]]*//p' "$f" | head -n 1 | tr -d "\"'" | sed 's/[[:space:]]*#.*$//; s/[[:space:]]*$//; s|^\./||; s|/$||')"
+    if [ -z "$dir" ] || [ "$dir" = docs ]; then printf 'mkdocs'; fi
+    return 0
+  done
+  for f in "$root"/docusaurus.config.*; do
+    if [ -f "$f" ]; then printf 'docusaurus'; return 0; fi
+  done
+  # Sphinx builds .md files only through a Markdown extension.
+  if [ -f "$root/docs/conf.py" ] && grep -qE 'myst_parser|recommonmark' "$root/docs/conf.py"; then
+    printf 'sphinx'; return 0
+  fi
+  if [ -d "$root/docs/.vitepress" ]; then printf 'vitepress'; return 0; fi
+  if [ -f "$root/docs/_config.yml" ]; then printf 'jekyll'; return 0; fi
 }
 
 cmd_detect() {
   local root="$1"
   local is_git=false is_clean=false is_legacy=false is_configured=false
   local has_claude_md=false has_state=false has_decisions=false
-  local stack status inv ai_setup src_count inv_error=false inv_rc=0
+  local stack docs_site status inv ai_setup src_count inv_error=false inv_rc=0
 
   if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     is_git=true
@@ -79,6 +101,7 @@ cmd_detect() {
   if [ -f "$root/docs/DECISIONS.md" ]; then has_decisions=true; fi
 
   stack="$(mk_detect_stack "$root")"
+  docs_site="$(mk_detect_docs_site "$root")"
 
   # Inventory runs in a subshell with errexit on, so a failure partway
   # through is seen as a non-zero status (not as partial JSON); any failure
@@ -102,6 +125,7 @@ cmd_detect() {
     --argjson legacy "$is_legacy" \
     --argjson configured "$is_configured" \
     --arg stack "$stack" \
+    --arg docsSite "$docs_site" \
     --argjson claudeMd "$has_claude_md" \
     --argjson state "$has_state" \
     --argjson decisions "$has_decisions" \
@@ -109,6 +133,7 @@ cmd_detect() {
       git: $git, clean: $clean, legacy: $legacy, configured: $configured,
       stack: ($stack | split(" ") | map(select(length > 0))),
       files: { claudeMd: $claudeMd, state: $state, decisions: $decisions },
+      docsSite: (if $docsSite == "" then null else $docsSite end),
       aiSetup: $aiSetup, sources: $sources, inventoryError: $invError
     }'
 }
@@ -690,6 +715,20 @@ mk_inv_classify_dirlink() {
   esac
 }
 
+# mk_inv_classify_unknown REL -- "unknown claude-code" for a text file (.md,
+# .txt) under .claude/ that no other rule recognises (e.g. .claude/learnings.md);
+# memokit's own files, subagent memory and the contents of known directories
+# are not. Text files only, so logs and caches neither cost time nor get read.
+mk_inv_classify_unknown() {
+  case "$1" in
+    .claude/settings.json|.claude/memokit.json) return 1 ;;
+    .claude/memokit/*|.claude/worktrees/*|.claude/hooks/*|.claude/skills/*|.claude/agents/*) return 1 ;;
+    .claude/commands/*|.claude/rules/*|.claude/output-styles/*|.claude/agent-memory*) return 1 ;;
+    .claude/*.md|.claude/*.txt) echo "unknown claude-code" ;;
+    *) return 1 ;;
+  esac
+}
+
 # mk_inv_frontmatter FILE -- prints "key<TAB>value" lines for the whitelisted
 # keys of a leading `---` block. Prints nothing when the block never closes.
 mk_inv_frontmatter() {
@@ -745,8 +784,12 @@ cmd_inventory() {
     kind="file"
     [ -d "$root/$rel" ] && kind="dir"
     if ! gt="$(mk_inv_classify "$rel" "$kind")"; then
-      if [ ! -L "$root/$rel" ] || [ "$kind" != dir ]; then continue; fi
-      gt="$(mk_inv_classify_dirlink "$rel")" || continue
+      if [ "$kind" = file ]; then
+        gt="$(mk_inv_classify_unknown "$rel")" || continue
+      else
+        [ -L "$root/$rel" ] || continue
+        gt="$(mk_inv_classify_dirlink "$rel")" || continue
+      fi
     fi
     group="${gt%% *}"; tool="${gt#* }"
     bytes=null

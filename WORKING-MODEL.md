@@ -61,7 +61,7 @@ git -C "$REPO" ls-files -z -co --exclude-standard -- <paths> | (cd "$REPO" && xa
 
 ## §9 Test tiers
 General rule, sequential and parallel work alike.
-- **Tier 1**, in every slice: build + unit tests of the touched projects + the slice's new or changed tests, red then green. Never Docker/Testcontainers, integration or E2E.
+- **Tier 1**, in every slice: build + unit tests of the touched projects + the slice's new or changed tests, red then green. No Testcontainers, integration or E2E; never start, build or recreate a container. A Tier-1 command may exec into an already running dev container (`docker exec`, `docker compose exec`) when that container sees the files under test.
 - **Tier 2** (heavy gates: integration, coverage, merge gate, E2E): once per batch, only after the user explicitly approves. Ask "Tier-2 gates next, or more work first?"; never run it unasked.
 - A slice is `gate-pending` until Tier 2 is green; do not call it done before.
 - Tier commands come from `.claude/memokit/gates.md`. If it is missing, ask the user once and write it; never guess.

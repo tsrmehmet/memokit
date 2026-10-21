@@ -8,6 +8,23 @@ INIT() { "$MK_BASH" "$MK_REPO/skills/init/scripts/memokit-init.sh" "$@"; }
   run INIT detect "$PROJ"
   printf '%s' "$output" | jq -e '.git and (.configured|not) and (.stack|index("dotnet")) and (.stack|index("node"))'
 }
+@test "0.7.1 detect: php from composer.json; vendor/ is not scanned" {
+  mk_project none; printf '{}' > "$PROJ/composer.json"; mkdir -p "$PROJ/vendor/a"; printf '{}' > "$PROJ/vendor/a/package.json"
+  run INIT detect "$PROJ"
+  printf '%s' "$output" | jq -e '.stack == ["php"]'
+}
+@test "0.7.1 detect: docsSite names a site generator that publishes docs/" {
+  mk_project none; run INIT detect "$PROJ"; printf '%s' "$output" | jq -e '.docsSite == null'
+  mk_project none; printf 'site_name: x\n' > "$PROJ/mkdocs.yml"; run INIT detect "$PROJ"; printf '%s' "$output" | jq -e '.docsSite == "mkdocs"'
+  mk_project none; printf 'site_name: x\ndocs_dir: site-src\n' > "$PROJ/mkdocs.yml"; run INIT detect "$PROJ"; printf '%s' "$output" | jq -e '.docsSite == null'
+  mk_project none; printf 'site_name: x\ndocs_dir: "docs"\n' > "$PROJ/mkdocs.yaml"; run INIT detect "$PROJ"; printf '%s' "$output" | jq -e '.docsSite == "mkdocs"'
+  mk_project none; touch "$PROJ/docusaurus.config.ts"; run INIT detect "$PROJ"; printf '%s' "$output" | jq -e '.docsSite == "docusaurus"'
+  mk_project none; printf 'docs_dir: docs  # source\n' > "$PROJ/mkdocs.yml"; run INIT detect "$PROJ"; printf '%s' "$output" | jq -e '.docsSite == "mkdocs"'
+  mk_project none; printf "extensions = ['myst_parser']\n" > "$PROJ/docs/conf.py"; run INIT detect "$PROJ"; printf '%s' "$output" | jq -e '.docsSite == "sphinx"'
+  mk_project none; printf "extensions = ['sphinx.ext.autodoc']\n" > "$PROJ/docs/conf.py"; run INIT detect "$PROJ"; printf '%s' "$output" | jq -e '.docsSite == null'
+  mk_project none; mkdir -p "$PROJ/docs/.vitepress"; run INIT detect "$PROJ"; printf '%s' "$output" | jq -e '.docsSite == "vitepress"'
+  mk_project none; touch "$PROJ/docs/_config.yml"; run INIT detect "$PROJ"; printf '%s' "$output" | jq -e '.docsSite == "jekyll"'
+}
 @test "detect: legacy" { mk_project none; mkdir -p "$PROJ/.claude/hooks"; run INIT detect "$PROJ"; printf '%s' "$output" | jq -e '.legacy'; }
 @test "detect: aiSetup false for a bare repo and for framework/personal/aux-only repos" {
   mk_project none

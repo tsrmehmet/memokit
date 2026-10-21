@@ -38,6 +38,11 @@ load helpers
   sec="$(sed -n '/^## §9/,$p' "$MK_REPO/WORKING-MODEL.md")"
   for w in 'Tier 1' 'Tier 2' 'Tier-2 gates next, or more work first?' 'gate-pending' '.claude/memokit/gates.md' 'never guess'; do printf '%s' "$sec" | grep -qF "$w" || { echo "$w"; false; }; done
 }
+@test "0.7.1: Tier 1 may exec into a running dev container, never start one" {
+  sec="$(sed -n '/^## §9/,$p' "$MK_REPO/WORKING-MODEL.md")"
+  for w in 'exec into an already running dev container' 'never start, build or recreate a container' 'Testcontainers' 'sees the files under test'; do printf '%s' "$sec" | grep -qF "$w" || { echo "$w"; false; }; done
+  run grep -F 'Never Docker' "$MK_REPO/WORKING-MODEL.md"; [ "$status" -ne 0 ]
+}
 @test "final M5: overlays cannot loosen any section" {
   grep -F '## §5' -A2 "$MK_REPO/WORKING-MODEL.md" | grep -qF 'They cannot loosen §1–§9.'
 }

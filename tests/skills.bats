@@ -508,3 +508,12 @@ has_all() { local f="$1" s; shift; for s in "$@"; do grep -qF -- "$s" "$f" || { 
   f="$MK_REPO/skills/init/SKILL.md"
   has_all "$f" 'Team — always ask' 'Recommend **no**' 'not pinned to a version' 'Only if the user said yes to Team: `$INIT settings "$ROOT"`' 'The `--drop-*` forms never register the plugin' 'Artifact, Team)'
 }
+@test "0.7.1: init proposes a docs-site exclusion for docsSite, written only on approval" {
+  l="$(grep -F '`docsSite` non-null' "$MK_REPO/skills/init/SKILL.md")"
+  for w in 'exclude_docs:' 'srcExclude' 'exclude_patterns' 'docs/_config.yml' 'only if the user approves'; do printf '%s' "$l" | grep -qF "$w" || { echo "$w"; false; }; done
+}
+@test "0.7.1 review: docs-site exclusion paths are relative to docs/ and verified by a build" {
+  l="$(grep -F '`docsSite` non-null' "$MK_REPO/skills/init/SKILL.md")"
+  for w in 'relative to `docs/`' 'keep all default patterns' 'build the site'; do printf '%s' "$l" | grep -qF "$w" || { echo "$w"; false; }; done
+  grep -F 'lists only personal files' "$MK_REPO/skills/init/SKILL.md" | grep -qF '`unknown`'
+}

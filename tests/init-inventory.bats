@@ -304,3 +304,18 @@ src() { printf '%s' "$output" | jq -e --arg p "$1" ".sources[] | select(.path ==
   inv
   printf '%s' "$output" | jq -e '[.hooks[].scriptPath] == [null, null]'
 }
+
+@test "0.7.1 inventory: unrecognised files under .claude/ are group unknown and not adoptable" {
+  mk_project none
+  put .claude/learnings.md; put .claude/notes/a.md; put .claude/notes/b.txt; put .claude/launch.json; put .claude/logs/x.json
+  put .claude/.DS_Store; put .claude/agent-memory/x/MEMORY.md
+  put .claude/settings.json '{}'; put .claude/memokit.json '{}'; put .claude/memokit/rules.md
+  put .claude/skills/s/SKILL.md; put .claude/skills/s/helper.sh; put .claude/agents/notes.txt
+  put .claude/hooks/h.sh; put .claude/worktrees/mk-a/CLAUDE.md
+  inv
+  src .claude/learnings.md '.group == "unknown" and .tool == "claude-code" and .kind == "file"'
+  printf '%s' "$output" | jq -e '[.sources[] | select(.group == "unknown") | .path] == [".claude/learnings.md", ".claude/notes/a.md", ".claude/notes/b.txt"]'
+  mk_project none; put .claude/learnings.md; inv
+  printf '%s' "$output" | jq -e '.adoptable == false and (.sources | length) == 1'
+  run INIT detect "$PROJ"; printf '%s' "$output" | jq -e '.aiSetup == false and .sources == 0'
+}

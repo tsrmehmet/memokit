@@ -65,7 +65,7 @@ GATE_STEP='If `.claude/memokit.json` does not exist in the project root, stop'
 }
 @test "coder runs Tier 1 only, in the foreground; Tier 2 is the orchestrator's" {
   r3="$(grep '^3\. ' "$MK_REPO/agents/coder.md")"
-  for w in 'Tier 1 only' 'WORKING-MODEL.md §9' 'build' 'unit tests of the touched projects' 'FOREGROUND' 'Never return `DONE` with a red Tier 1' 'report the current Tier-1 state as is' 'never run Tier 2' 'no Docker' 'Testcontainers' 'no integration' 'E2E' 'coverage' 'merge gate' 'explicit approval' 'orchestrator'; do
+  for w in 'Tier 1 only' 'WORKING-MODEL.md §9' 'build' 'unit tests of the touched projects' 'FOREGROUND' 'Never return `DONE` with a red Tier 1' 'report the current Tier-1 state as is' 'never run Tier 2' 'never start, build or recreate a container' 'Testcontainers' 'no integration' 'E2E' 'coverage' 'merge gate' 'explicit approval' 'orchestrator'; do
     printf '%s' "$r3" | grep -qF "$w" || { echo "rule 3 missing: $w"; false; }
   done
 }
@@ -123,6 +123,14 @@ GATE_STEP='If `.claude/memokit.json` does not exist in the project root, stop'
     printf '%s' "$r1" | grep -qF "$w" || { echo "missing: $w"; false; }
   done
 }
+@test "0.7.1: container exec counts as Tier 1 only when the container sees the files under test" {
+  r3="$(grep '^3\. ' "$MK_REPO/agents/coder.md")"
+  for w in 'exec into an already running dev container' 'sees the files under test' '`BLOCKED` with `container does not see the worktree`'; do printf '%s' "$r3" | grep -qF "$w" || { echo "coder: $w"; false; }; done
+  grep '^1\. ' "$MK_REPO/agents/reviewer.md" | grep -qF 'exec into an already running dev container' || { echo reviewer; false; }
+  grep -qF 'exec into an already running dev container' "$MK_REPO/skills/init/templates/gates.md" || { echo template; false; }
+  run grep -F 'no Docker' "$MK_REPO/skills/init/templates/gates.md"; [ "$status" -ne 0 ]
+  grep -F 'execs into a container' "$MK_REPO/skills/parallel/SKILL.md" | grep -qF 'sequentially' || { echo parallel; false; }
+}
 @test "fix1 I5/M3: analyst read-only covers MCP tools; status without locks" {
   f="$MK_REPO/agents/analyst.md"
   for w in 'every tool, MCP included' 'no ticket comments' 'transitions' 'design-tool edits' 'no messages' 'git --no-optional-locks status'; do
@@ -147,4 +155,14 @@ GATE_STEP='If `.claude/memokit.json` does not exist in the project root, stop'
   l="$(grep -F 'Read `.claude/memokit/coder.md`' "$MK_REPO/agents/coder.md")"
   run grep -F 'test commands and' <<<"$l"; [ "$status" -ne 0 ]
   grep -qF 'test commands live in `gates.md`' <<<"$l"
+}
+@test "0.7.1: Tier 1 stays fast and scoped; whole-repo analysis is Tier 2" {
+  grep -qF 'scoped to the touched projects; whole-repo static analysis' "$MK_REPO/skills/init/templates/gates.md"
+  grep -qF 'whole-repo static analysis such as a full `phpstan` run goes to Tier 2' "$MK_REPO/skills/init/SKILL.md"
+}
+@test "0.7.1 review: container exec needs a visibility probe; reviewer states the same condition" {
+  r3="$(grep '^3\. ' "$MK_REPO/agents/coder.md")"
+  printf '%s' "$r3" | grep -qF 'probe file' || { echo coder; false; }
+  grep '^1\. ' "$MK_REPO/agents/reviewer.md" | grep -qF 'sees the files under test' || { echo reviewer; false; }
+  run grep -F 'integration/Docker/E2E/coverage' "$MK_REPO/skills/resume/SKILL.md"; [ "$status" -ne 0 ]
 }
