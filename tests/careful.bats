@@ -214,6 +214,437 @@ XEOF
   printf '%s\n' "$output" | grep -qx 'sql-destructive'
 }
 
+# The 0.7.1 computed-word cases stay denied (fail closed).
+@test "0.7.2: a computed command word is still rm" {
+  mk_project
+  while IFS='|' read -r want cmd; do
+    [ -z "$want" ] && continue
+    labels "$cmd"
+    printf '%s\n' "$output" | grep -qx "$want" || { echo "missed $want: $cmd -> [$output]"; false; }
+  done <<'XEOF'
+rm-recursive|$RM -rf x
+rm-recursive|${RM} -rf x
+rm-recursive|"$RM" -rf x
+rm-recursive|/bin/r? -rf x
+rm-recursive|sudo $RM -rf x
+rm-recursive|sudo -n $RM -rf x
+rm-recursive|/usr/bin/sudo -n $RM -rf x
+rm-recursive|env A=1 $RM -rf x
+rm-recursive|A=1 $RM -rf x
+rm-recursive|A=1 B=2 $RM -rf x
+rm-recursive|LC_ALL=C sudo $RM -rf x
+rm-recursive|xargs $RM -rf
+rm-recursive|xargs -0 $RM -rf
+rm-recursive|command $RM -rf x
+rm-recursive|nohup $RM -rf x
+rm-recursive|builtin $RM -rf x
+rm-recursive|exec $RM -rf x
+rm-recursive|time $RM -rf x
+rm-recursive|ls; $RM -rf x
+rm-recursive|true && $RM -rf x
+rm-recursive|false || $RM -rf x
+rm-recursive|find . | xargs $RM -rf
+rm-recursive|for f in a; do $RM -rf "$f"; done
+rm-recursive|! $RM -rf x
+rm-recursive|{ $RM -rf x; }
+rm-recursive|( $RM -rf x )
+rm-recursive|($RM -rf x)
+rm-recursive|x=$($RM -rf x)
+rm-recursive|echo "$($RM -rf x)"
+rm-recursive|echo `$RM -rf x`
+rm-recursive|cat <($RM -rf x)
+rm-recursive|case a in a) $RM -rf x;; esac
+rm-recursive|f() { $RM -rf x; }
+rm-recursive|trap '$RM -rf x' EXIT
+rm-recursive|ssh host $RM -rf x
+rm-recursive|docker exec c $RM -rf x
+rm-recursive|kubectl exec p -- $RM -rf x
+rm-recursive|find . -execdir $RM -r {} +
+rm-recursive|$'\x72m' -rf x
+rm-recursive|'a'$RM -rf x
+XEOF
+  # Documented false positives (README, Limitations): a computed word that is
+  # not a command, outside a read-only first word.
+  while IFS='|' read -r want cmd; do
+    [ -z "$want" ] && continue
+    labels "$cmd"
+    printf '%s\n' "$output" | grep -qx "$want" || { echo "missed $want: $cmd -> [$output]"; false; }
+  done <<'XEOF'
+rm-recursive|"$EDITOR" -R notes.md
+rm-recursive|sudo grep -n "$p" -r src
+XEOF
+}
+
+# 0.7.2 (BL-449), approach A: a computed word + recursive option anywhere in a
+# segment is rm-recursive (as in 0.7.1), except in a segment whose first word
+# is exactly a read-only tool, with no substitution or grouping.
+@test "0.7.2: computed word in places the command-position rule missed is rm" {
+  mk_project
+  while IFS='|' read -r want cmd; do
+    [ -z "$want" ] && continue
+    labels "$cmd"
+    printf '%s\n' "$output" | grep -qx "$want" || { echo "missed $want: $cmd -> [$output]"; false; }
+  done <<'XEOF'
+rm-recursive|case x in a)$RM -rf y;; esac
+rm-recursive|a) "$RM" -rf y
+rm-recursive|function f { $RM -rf x; }
+rm-recursive|f() { "${RM}" -rf x; }
+rm-recursive|gtimeout 5 $RM -rf x
+rm-recursive|pkexec $RM -rf x
+rm-recursive|fakeroot $RM -rf x
+rm-recursive|busybox $RM -rf x
+rm-recursive|$SHELL -c "$RM -rf x"
+rm-recursive|$SHELL -c '$RM -rf x'
+rm-recursive|grep x $($RM -rf y)
+rm-recursive|grep x `$RM -rf y`
+rm-recursive|grep x <($RM -rf y)
+rm-recursive|grep x >($RM -rf y)
+rm-recursive|grep x; $RM -rf y
+rm-recursive|grep x && "$RM" -rf y
+rm-recursive|grep x | xargs $RM -rf
+rm-recursive|grep x&$RM -rf y
+rm-recursive|grep() { $RM -rf "$1"; }
+rm-recursive|/tmp/grep $RM -rf x
+rm-recursive|"grep" $RM -rf x
+rm-recursive|grep2 $RM -rf x
+rm-recursive|/usr/bin/grep -n "a.*" -r x
+rm-recursive|LC_ALL=C grep -n "a.*b" -r src
+rm-recursive|X=1 jq '.a[]' -r f.json
+rm-recursive|grep -nE "^(foo|bar)$" -r src
+rm-recursive|tar --to-command="$RM" -rf a.tar
+rm-recursive|tar --use-compress-program "$RM" -rf a.tar
+rm-recursive|tar --use-c=$RM -rf a.tar
+rm-recursive|tar -I "$RM" -rf a.tar
+rm-recursive|tar -xIf $RM -rf a.tar
+rm-recursive|tar --checkpoint-action=exec=x -C "$d" -rf a.tar
+rm-recursive|git grep -O"$RM" -r x
+rm-recursive|rg --pre "$RM" -r x f
+rm-recursive|sed -n "s/$X/y/" -r f
+rm-recursive|awk "BEGIN{system(\"$X\")}" -r f
+rm-recursive|grep -rn "func(.*)" -r .
+rm-recursive|git ls-files | grep -n "x.*" -r
+rm-recursive|X="a;grep x" $RM -rf y
+rm-recursive|X='a|grep x' $RM -rf y
+rm-recursive|X=$'a;grep x' $RM -rf y
+rm-recursive|env X="a;grep x" $RM -rf y
+rm-recursive|sudo -u "a;grep x" $RM -rf y
+rm-recursive|exec -a "a;grep x" $RM -rf y
+rm-recursive|>"a;grep x" $RM -rf y
+rm-recursive|2>'a|ls x' "$RM" -rf y
+rm-recursive|X="a;tar x" /bin/r? -rf y
+rm-recursive|X="a;git log x" $RM -rf y
+rm-recursive|X="a;grep x" $RM -r -f y
+rm-recursive|X="a;grep x" $RM --recursive y
+rm-recursive|if grep -q "a;grep x" $RM -rf y; then :; fi
+rm-recursive|X="a\";grep x" $RM -rf y
+rm-recursive|X="a;grep x" $RM -rf y "b;c"
+rm-recursive|ag --pager "$RM -rf y" x
+rm-recursive|ag --pager="$RM -rf y" x
+rm-recursive|tar -C "$d" --remove-files -rf a.tar src
+rm-recursive|tar --remove-files -C "$d" -rvf a.tar .
+rm-recursive|tar --recursive-unlink -C "$d" -rxf a.tar
+rm-recursive|tar --rsh-command "$RM" -rf a.tar
+rm-recursive|tar --rmt-command "$RM" -rf a.tar
+rm-recursive|tar --new-volume-script "$RM" -rf a.tar
+rm-recursive|tar --info-script "$RM" -rf a.tar
+rm-recursive|tar -F "$RM" -rf a.tar
+rm-recursive|tar "-I$RM" -rf a.tar
+rm-recursive|tar "--to-command=$RM" -rf a.tar
+rm-recursive|git grep --open-files-in-pager="$RM" -r x
+rm-recursive|rg --hostname-bin "$RM" -r x f
+rm-recursive|tar $'--to-command=x' "$RM" -rf a.tar
+rm-recursive|tar $"--to-command=x" "$RM" -rf a.tar
+rm-recursive|tar $'--use-compress-program' "$RM" -rf a.tar
+rm-recursive|tar -C "$d" $'--remove-files' -rf a.tar src
+rm-recursive|tar -C "$d" $'--recursive-unlink' -rxf a.tar
+rm-recursive|tar -C "$d" $'--rem' -rf a.tar src
+rm-recursive|rg $'--pre' "$RM" -r x f
+rm-recursive|rg $"--pre" "$RM" -r x f
+rm-recursive|git grep $'-O' "$RM" -r x
+rm-recursive|git grep $'--open-files-in-pager' "$RM" -r x
+rm-recursive|grep -n 'x$' -r src
+rm-recursive|tar -C "$d"/--rem -rf a.tar src
+rm-recursive|rg -n x/--pre "$RM" -r f
+rm-recursive|grep x `$RM '' -rf y`
+rm-recursive|grep x `$RM "" -rf y`
+rm-recursive|grep x `"$RM" '' -rf y`
+rm-recursive|grep x `$RM '' -r -f y`
+rm-recursive|grep x `$RM ''  --recursive y`
+rm-recursive|grep x `$RM \  -rf y`
+rm-recursive|grep x `$RM {} -rf y`
+rm-recursive|grep x $(  $RM '' -rf y )
+rm-recursive|ls `$RM '' -rf y`
+rm-recursive|jq . `$RM "" -Rf y`
+rm-recursive|grep x ${z:="a[\$${BASH_VERSION:6:1}\$RM -rf y${BASH_VERSION:8:1}]"} $[z] f.txt
+rm-recursive|grep x $[x] -r .
+rm-recursive|grep x ${~x} -r .
+rm-recursive|grep x $=x -r .
+rm-recursive|grep x ${x?msg} -r .
+rm-recursive|grep x $((1+1)) -r .
+rm-recursive|grep x $$ -r .
+rm-recursive|grep x $1 -r .
+rm-recursive|grep x $@ -r .
+rm-recursive|grep -n "${p}" -r src
+rm-recursive|grep -n "x$" -r src
+rm-recursive|yq --security-enable-system-operator "$EXPR" -r f
+rm-recursive|yq --security-enable-system-operator --from-file e.yq "$f" -r
+rm-recursive|yq '.a[]' -r f.yaml
+rm-recursive|tar -C "$d" -rvf a.tar
+rm-recursive|rg "a.*b" -r x f
+rm-recursive|git grep -n "a.*" -r
+rm-recursive|git log --grep "a.*" -r
+rm-recursive|tar -${u}-to-command=$RM -xRf a.tar
+rm-recursive|tar ${u:--}-to-command=$RM -xRf a.tar
+rm-recursive|tar --t${u}o-command=$RM -xRf a.tar
+rm-recursive|tar --t$u'o'-command=$RM -xRf a.tar
+rm-recursive|tar -{-to-command=$RM,v} -xRf a.tar
+rm-recursive|tar --t{o-command=$RM,otals} -xRf a.tar
+rm-recursive|tar -${u}-use-compress-program=$RM -xRf a.tar
+rm-recursive|tar -${u}-remove-files -C "$d" -rf a.tar src
+rm-recursive|tar -{-remove-files,v} -C "$d" -rf a.tar src
+rm-recursive|tar ${u:--}-rem -C "$d" -rf a.tar src
+rm-recursive|git grep -${u}-open-files-in-pager=$RM -r x
+rm-recursive|git grep -{-open-files-in-pager=$RM,n} -r x
+rm-recursive|rg -${u}-pre=$RM -r x f
+rm-recursive|rg -{-pre=$RM,n} -r x f
+rm-recursive|rg ${u:--}-pre=$RM -r x f
+rm-recursive|rg -${u}-hostname-bin=$RM -r x f
+rm-recursive|tar	-${u}-to-command=$RM -xRf a.tar
+rm-recursive|git	grep -{-open-files-in-pager=$RM,n} -r x
+XEOF
+  # A quoted newline is a segment break too.
+  labels "$(printf 'X="a\ngrep x" $RM -rf y')"
+  printf '%s\n' "$output" | grep -qx rm-recursive || { echo "newline form -> [$output]"; false; }
+}
+
+@test "0.7.2: a computed operand of a read-only first word is not rm (BL-449)" {
+  mk_project
+  while IFS= read -r cmd; do
+    [ -z "$cmd" ] && continue
+    labels "$cmd"
+    [ -z "$output" ] || { echo "false positive: $cmd -> [$output]"; false; }
+  done <<'XEOF'
+grep -n "Send.*Key" -r tests
+jq '.items[]' -r f.json
+ls tests/*.cs -R
+cp src/*.cs -r dst
+cp "$src"/* -r dst
+cp $SRC -r dst
+grep x {$RM,'',-rf,y}
+ls -la tests/*.cs -R
+egrep -n "a.*b" -r src
+diff -r a/*.txt b
+head -n 3 *.log -R
+XEOF
+}
+
+# Security review round 5: in a double-byte locale a lead byte + backtick is
+# one character, so the exemption's [^$`<>&()] swallowed the backtick. The
+# match is byte-wise, and the exemption exists only in C/POSIX/UTF-8 locales
+# (anywhere else the plain 0.7.1 rule runs over every view).
+labels_in() {
+  run env -u LANG -u LC_CTYPE LC_ALL="$1" "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; . '$HOOKS/lib/careful.sh'; mk_resolve_root '{}'; mk_load_config >/dev/null; mk_careful_labels \"\$1\"" _ "$2"
+}
+
+# has_locale NAME -- C always; others only when `locale -a` lists them
+# (case-insensitive: names vary, en_US.utf8 vs en_US.UTF-8).
+has_locale() {
+  [ "$1" = C ] || locale -a 2>/dev/null | grep -qix "$1"
+}
+
+# want_rm LOCALE CMD -- labels_in, then rm-recursive must be among the labels.
+want_rm() {
+  labels_in "$1" "$2"
+  printf '%s\n' "$output" | grep -qx rm-recursive || { echo "$1: $2 -> [$output]"; false; }
+}
+
+# want_clean LOCALE CMD -- labels_in, then no label at all.
+want_clean() {
+  labels_in "$1" "$2"
+  [ -z "$output" ] || { echo "$1: $2 -> [$output]"; false; }
+}
+
+# gate_ok ENV... -- run the locale-name gate under exactly these variables.
+gate_ok() {
+  run env -u LC_ALL -u LC_CTYPE -u LANG "$@" "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; . '$HOOKS/lib/careful.sh'; _mk_cf_exempt 'grep x \$RM -rf y'"
+}
+
+# skip_no_dbcs -- skip (explicitly) when the machine has no double-byte locale.
+skip_no_dbcs() {
+  local loc
+  for loc in zh_TW.Big5 zh_CN.GBK zh_CN.GB18030; do
+    has_locale "$loc" && return 0
+  done
+  skip "no double-byte locale (Big5/GBK/GB18030) installed"
+}
+
+# labels_mixed CTYPE LANG CMD -- LC_ALL unset, LC_CTYPE=CTYPE, LANG=LANG.
+labels_mixed() {
+  run env -u LC_ALL LC_CTYPE="$1" LANG="$2" "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; . '$HOOKS/lib/careful.sh'; mk_resolve_root '{}'; mk_load_config >/dev/null; mk_careful_labels \"\$1\"" _ "$3"
+}
+
+@test "0.7.2: round-5 repro, a double-byte lead byte does not hide a backtick substitution" {
+  skip_no_dbcs
+  mk_project
+  cmd=$'grep x \xe2\xa1\xa1`$RM -rf y \xe2\xa1\xa1`'
+  for loc in zh_TW.Big5 zh_CN.GBK zh_CN.GB18030 en_US.UTF-8 C; do
+    has_locale "$loc" || continue
+    want_rm "$loc" "$cmd"
+  done
+}
+
+@test "0.7.2: backslash lines joined by bash only in UTF-8, not after a double-byte lead byte" {
+  skip_no_dbcs
+  mk_project
+  for loc in zh_TW.Big5 zh_CN.GBK zh_CN.GB18030 en_US.UTF-8; do
+    has_locale "$loc" || continue
+    want_rm "$loc" $'echo x \\\ny \xe2\xa1\xa1\\\nrm -rf z'
+    # continuation lines are never exempt (accepted false positive in UTF-8,
+    # where bash joins them into one grep; a real command in a double-byte locale)
+    want_rm "$loc" $'grep x \\\ny \xe2\xa1\xa1\\\n$RM -rf z'
+  done
+}
+
+@test "0.7.2: round-7 repro, a nonexistent UTF-8 LC_CTYPE name falls back to a double-byte LANG" {
+  skip_no_dbcs
+  mk_project
+  cmd=$'grep x \\\ny \xe2\xa1\xa1\\\n$RM -rf z'
+  for lang in zh_TW.Big5 zh_CN.GBK; do
+    has_locale "$lang" || continue
+    for ct in en_US.utf8 xx_XX.UTF-8 en_US.UTF-8@euro; do
+      labels_mixed "$ct" "$lang" "$cmd"
+      printf '%s\n' "$output" | grep -qx rm-recursive || { echo "$ct/$lang -> [$output]"; false; }
+    done
+  done
+}
+
+@test "0.7.2: round-9 pin, the byte-wise LC_ALL=C in _mk_cf_exempt holds in the mixed env (gate passes by name, bash uses the double-byte LANG)" {
+  skip_no_dbcs
+  mk_project
+  cmd=$'grep x \xe2\xa1\xa1`$RM -rf y \xe2\xa1\xa1`'
+  local ran=0
+  for lang in zh_TW.Big5 zh_CN.GBK zh_CN.GB18030; do
+    has_locale "$lang" || continue
+    ran=1
+    labels_mixed en_US.utf8 "$lang" "$cmd"
+    printf '%s\n' "$output" | grep -qx rm-recursive || { echo "$lang -> [$output]"; false; }
+  done
+  [ "$ran" = 1 ]
+}
+
+@test "0.7.2: benign single-line commands stay unlabelled with a nonexistent UTF-8 LC_CTYPE" {
+  mk_project
+  for lang in C en_US.UTF-8; do
+    has_locale "$lang" || continue
+    labels_mixed en_US.utf8 "$lang" 'grep x $RM -rf y'
+    [ -z "$output" ] || { echo "$lang: [$output]"; false; }
+    labels_mixed en_US.utf8 "$lang" 'grep -n "Send.*Key" -r tests'
+    [ -z "$output" ] || { echo "$lang: [$output]"; false; }
+  done
+}
+
+@test "0.7.2: a real continuation line after an exempt-looking command is rm-recursive" {
+  mk_project
+  if has_locale en_US.UTF-8; then
+    want_rm en_US.UTF-8 $'grep x $RM -rf y \\\n; $RM -rf z'
+  fi
+  want_rm C $'grep x $RM -rf y \\\n; $RM -rf z'
+}
+
+@test "0.7.2: benign read-only commands are exempt in C and UTF-8 locales only" {
+  mk_project
+  for loc in C en_US.UTF-8 C.UTF-8; do
+    has_locale "$loc" || continue
+    want_clean "$loc" 'grep x $RM -rf y'
+    want_clean "$loc" 'grep -n "Send.*Key" -r tests'
+  done
+  if has_locale zh_TW.Big5; then
+    # accepted false positive: no exemption outside UTF-8/C, as in 0.7.1
+    want_rm zh_TW.Big5 'grep x $RM -rf y'
+    want_rm zh_TW.Big5 'grep -n "Send.*Key" -r tests'
+  fi
+}
+
+# Round 8: the exemption modelled redirections and was fooled by escaping
+# (`a\>&"$RM" -rf y`: \> is a literal, & is the background operator, "$RM" runs).
+# Option A: redirections are never exempt; no backslash, < > or & at all.
+@test "0.7.2: round-8 repros, an escaped redirection does not hide a computed command word" {
+  mk_project
+  for loc in C en_US.UTF-8; do
+    has_locale "$loc" || continue
+    want_rm "$loc" 'grep x a\>&"$RM" -rf y'
+    want_rm "$loc" 'grep x \>&"$RM" -rf y'
+    want_rm "$loc" 'grep x a\<&"$RM" -rf y'
+    want_rm "$loc" 'grep -r x a\>&"$RM" -r y'
+    want_rm "$loc" 'jq . f\>&"$RM" -rf y'
+    want_rm "$loc" 'grep x a\>&/bin/r? -rf y'
+  done
+}
+
+@test "0.7.2: round-8, redirections are never exempt (accepted false positives)" {
+  mk_project
+  for loc in C en_US.UTF-8; do
+    has_locale "$loc" || continue
+    # computed word directly followed by a recursive option, plus a redirection
+    # anywhere: no longer exempt, asks for approval (accepted false positive)
+    want_rm "$loc" 'grep x $D -r >out'
+    want_rm "$loc" 'grep x $D -r 2>/dev/null'
+    want_rm "$loc" 'cat *.txt -r 2>&1'
+    # a redirection BETWEEN the word and the option, or the recursive option
+    # BEFORE the computed word, is no rm shape (DYNRM): unlabelled, not an FP
+    want_clean "$loc" 'cat *.txt 2>&1 -r'
+    want_clean "$loc" 'grep -rn x $D 2>/dev/null'
+    want_clean "$loc" 'grep -rn x $D >out'
+  done
+}
+
+@test "0.7.2: round-8, benign commands stay unlabelled in C, en_US.UTF-8 and C.UTF-8" {
+  mk_project
+  for loc in C en_US.UTF-8 C.UTF-8; do
+    has_locale "$loc" || continue
+    want_clean "$loc" 'grep x $RM -rf y'
+    want_clean "$loc" 'grep -n "Send.*Key" -r tests'
+    want_clean "$loc" 'jq -r .x $F'
+    want_clean "$loc" 'ls -R $D'
+    want_clean "$loc" "jq '.items[]' -r f.json"
+    want_clean "$loc" 'ls tests/*.cs -R'
+  done
+}
+
+@test "0.7.2: round-8, mixed env (LC_CTYPE falls back to a double-byte LANG): lead byte hides neither | nor an escaped redirection" {
+  skip_no_dbcs
+  mk_project
+  for lang in zh_TW.Big5 zh_CN.GBK; do
+    has_locale "$lang" || continue
+    for cmd in $'grep x \xa1\\\\>&"$RM" -rf y' $'grep x \xa1|$RM -rf y'; do
+      labels_mixed en_US.utf8 "$lang" "$cmd"
+      printf '%s\n' "$output" | grep -qx rm-recursive || { echo "$lang: $cmd -> [$output]"; false; }
+    done
+  done
+}
+
+@test "0.7.2: round-8, _mk_cf_oneseg is byte-wise (a double-byte lead byte does not swallow |)" {
+  skip_no_dbcs
+  for lang in zh_TW.Big5 zh_CN.GBK; do
+    has_locale "$lang" || continue
+    run env -u LC_ALL LC_CTYPE=en_US.utf8 LANG="$lang" "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; . '$HOOKS/lib/careful.sh'; if _mk_cf_oneseg \"\$1\"; then echo true; else echo false; fi" _ $'grep x \xa1|y'
+    [ "$output" = false ] || { echo "$lang: oneseg -> [$output]"; false; }
+  done
+}
+
+@test "0.7.2: locale gate reads the effective LC_CTYPE (LC_ALL, then LC_CTYPE, then LANG)" {
+  gate_ok;                                   [ "$status" -eq 0 ]
+  gate_ok LANG=tr_TR.UTF-8;                  [ "$status" -eq 0 ]
+  gate_ok LANG=en_US.utf8;                   [ "$status" -eq 0 ]
+  gate_ok LANG=de_DE.UTF-8@euro;             [ "$status" -eq 0 ]
+  gate_ok LC_ALL=POSIX;                      [ "$status" -eq 0 ]
+  gate_ok LC_ALL=C LANG=zh_TW.Big5;          [ "$status" -eq 0 ]
+  gate_ok LC_ALL= LC_CTYPE=zh_TW.Big5;       [ "$status" -ne 0 ]
+  gate_ok LC_ALL= LC_CTYPE= LANG=zh_CN.GBK;  [ "$status" -ne 0 ]
+  gate_ok LANG=zh_CN.GB18030;                [ "$status" -ne 0 ]
+  gate_ok LC_CTYPE=en_US.ISO8859-1;          [ "$status" -ne 0 ]
+}
+
 @test "long heredoc where every line mentions tools is fast and unlabelled" {
   mk_project
   body="cat > notes.txt <<EOF"

@@ -34,9 +34,50 @@ MK_CF_RECURSIVE='--r(e(c(u(r(s(i(ve?)?)?)?)?)?)?)?'
 MK_CF_FORCE='--fo(r(ce?)?)?'
 MK_CF_HARD='--ha(rd?)?'
 # A word the shell computes ($VAR, ${VAR}, $'..', a glob such as /bin/r?)
-# right before rm's recursive option, after options rm also has: it may well
-# be rm, so it counts as one (fail closed, no safelist).
+# anywhere in a segment, right before rm's recursive option, after options
+# rm also has: it may well be rm, so it counts as one (fail closed, no
+# safelist). The word is not parsed as a command position (0.7.2 tried that
+# and missed "a)$RM", function heads and unknown wrappers: a blacklist of
+# wrappers is never complete).
 MK_CF_DYNRM='(^|[[:space:]])[^[:space:]]*([$*?]|\[[^][:space:]]*\])[^[:space:]]*([[:space:]]+(-[dfiIPRrvWx]+|--[[:alnum:]-]+))*[[:space:]]+(-[dfiIPRrvWx]*[rR][dfiIPRrvWx]*|'"$MK_CF_RECURSIVE"')([[:space:]]|$)'
+# Exemption (0.7.2, BL-449: grep -n "Send.*Key" -r tests, jq '.[]' -r f and
+# ls *.cs -R were denied), decided once on the raw command text (not per
+# line, not on the flat view): a command that is ONE
+# segment (_mk_cf_oneseg on every view AND on the raw text: no ; | && || " & "
+# or newline anywhere, quoted or not, because quotes are not parsed and a
+# separator inside quotes would fake a segment starting with grep; the raw
+# text is also one line: continuation lines are never exempt), whose
+# FIRST word is exactly one of the tools below (bare name + blank: not
+# grep(), /tmp/grep, grep2 or "grep"; no absolute path; no leading NAME=value,
+# so LC_ALL=C grep stays denied) and which holds no substitution or grouping
+# ( ` ( ) < > & or backslash (redirections are never exempt: modelling them
+# was fooled by escaping, `a\>&"$RM" -rf y` runs "$RM" in the background), and
+# in which every $
+# is followed by a letter or _ (plain $NAME, "$NAME"; so no ${..}, $[..],
+# $((..)), $(..), $'..', $".." , $1, $@, $=x, $~x, $$ or a trailing $: they
+# can run code or spell any option) is not a computed-word rm.
+# Premise (README Limitations): in Claude Code's Bash tool grep is a shell
+# function running the embedded ugrep, whose --filter/--pager/--view run
+# programs; Claude Code's shim falls back to system grep when they appear
+# (measured 2026-11-05, ugrep 7.8.4). A shim without that fallback breaks this.
+# What was checked (measured on macOS, 2026-11-04): the macOS/BSD man pages/help of
+# grep, jq, cp, head, tail, wc, cat, ls and diff were scanned for an option
+# that runs a program (diff
+# --paginate runs only pr); the GNU variants were NOT measured (documented to
+# have no such option). cp --remove-destination/-f replaces a destination
+# file by the source. yq is NOT listed (mikefarah's system operator, python
+# yq runs jq from PATH). No blacklist of options: a
+# command that can run a program is not on the list (0.7.2 tried tar, git
+# grep/log and rg with a blacklist and option names built by ${u}, brace
+# expansion or quoting slipped through; sed's e, awk's system() and ag's
+# --pager are no better). The regex test is byte-wise (LC_ALL=C, _mk_cf_exempt,
+# and _mk_cf_oneseg): in a double-byte locale lead byte + backtick is one character.
+# Cost: one bash regex test, no fork; when it holds,
+# the DYNRM grep pass is skipped.
+_mk_cf_exw='(grep|egrep|fgrep|jq|ls|cat|head|tail|wc|diff|cp)'
+# shellcheck disable=SC2016  # ERE text: $ and the backtick are literal here
+_mk_cf_exu='[^$`<>&()\]|[$][[:alpha:]_]'
+MK_CF_DYNEXEMPT="^[[:space:]]*${_mk_cf_exw}[[:space:]]+(${_mk_cf_exu})*\$"
 # The approval (grant) file, case-insensitively (macOS file systems are):
 # its name, also through a glob that keeps "grant" (careful?grants,
 # careful*grants), or a glob on a memokit- path in a word that also names a
@@ -220,12 +261,49 @@ mk_careful_flat() {
 }
 
 # mk_careful_segments CMD -- one shell segment per line. Quotes are not
-# parsed: a separator inside quotes only makes an extra, harmless split.
+# parsed: a separator inside quotes makes an extra split. That is harmless for
+# the rules that look for something in a segment (the pieces still hold the
+# words), but it can fake a segment START (X="a;grep x" $RM -rf y): so a rule
+# that depends on a segment's first word (the DYNRM exemption) only applies
+# when the whole command is one segment.
 mk_careful_segments() {
   printf '%s\n' "$1" | awk '{ gsub(/&&|\|\||;|\|/, "\n"); gsub(/[[:space:]]&[[:space:]]/, "\n"); print }'
 }
 
-# mk_careful_builtin CMD -- builtin labels the command matches, one per line
+# _mk_cf_exempt TEXT -- true when TEXT matches MK_CF_DYNEXEMPT, byte-wise: in a
+# double-byte locale (Big5, GBK, GB18030) a lead byte + backtick (0x60) is ONE
+# character that the bracket class [^$`<>&()\] swallows, so a command
+# substitution looked exempt. LC_ALL=C is local to this function (bash 3.2 ok).
+# Only in a C/POSIX/UTF-8 locale (_mk_cf_ctype_ok); elsewhere never exempt.
+_mk_cf_exempt() {
+  _mk_cf_ctype_ok "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" || return 1
+  local LC_ALL=C
+  [[ $1 =~ $MK_CF_DYNEXEMPT ]]
+}
+
+# _mk_cf_ctype_ok NAME -- true when NAME (the effective LC_CTYPE: first
+# non-empty of LC_ALL, LC_CTYPE, LANG) is empty, C, POSIX or a UTF-8 locale
+# (codeset case-insensitive, optional @modifier). Pure bash, no fork.
+_mk_cf_ctype_ok() {
+  case "$1" in
+    ''|C|POSIX|C@*|POSIX@*) return 0 ;;
+    *.[Uu][Tt][Ff]-8|*.[Uu][Tt][Ff]-8@*|*.[Uu][Tt][Ff]8|*.[Uu][Tt][Ff]8@*) return 0 ;;
+  esac
+  return 1
+}
+
+# _mk_cf_oneseg TEXT -- true when mk_careful_segments would not split TEXT:
+# no newline, ; | && or blank-& -blank, quoted or not (bash patterns, no fork).
+_mk_cf_oneseg() {
+  local LC_ALL=C # byte-wise: a double-byte lead byte must not swallow | or ;
+  case "$1" in
+    *'
+'*|*\;*|*\|*|*'&&'*|*[[:space:]]\&[[:space:]]*) return 1 ;;
+  esac
+  return 0
+}
+
+# mk_careful_builtin CMD [ONE] -- builtin labels the command matches, one per line
 # (careful-state is checked by mk_careful_labels). A failing stage prints
 # unparsed and falls back to the unprocessed text, so no rule is skipped.
 mk_careful_builtin() {
@@ -285,7 +363,10 @@ mk_careful_builtin() {
   # rm: a computed command word (one grep), else one grep pre-selects
   # segments and the (fork-free) token parser runs, at most
   # MK_CF_MAX_RM_SEGS times (bounded time; fail closed past that).
-  if _mk_cf_rule "$segs" "$MK_CF_DYNRM"; then printf 'rm-recursive\n'; fi
+  # ONE=1 (set by _mk_cf_labels: the raw command is one exempt read-only
+  # segment) skips this rule, nothing can run but the first word; absent or
+  # anything else: the plain 0.7.1 rule over all views, fail closed.
+  if [ "${2:-0}" != 1 ] && _mk_cf_rule "$segs" "$MK_CF_DYNRM"; then printf 'rm-recursive\n'; fi
   rmsegs="$(printf '%s\n' "$segs" | grep -E '(^|[^[:alnum:]_.-])rm[[:space:]]' 2>/dev/null)" || rc=$?
   if [ "$rc" -gt 1 ]; then printf 'unparsed\n'; rmsegs="$segs"; fi
   n=0
@@ -417,7 +498,7 @@ EOF
 # that fails or comes back empty prints unparsed and the next stage works on
 # the unprocessed text, so a broken tool never turns into "no label".
 _mk_cf_labels() {
-  local t n tok joined stripped views flat _MK_CF_TEMP_OK=0 nl='
+  local t n tok joined stripped views flat one _MK_CF_TEMP_OK=0 nl='
 '
   # careful-state first, before any other stage can fail, and also when the
   # command is too-large (approvable; careful-state never is): one grep -c on
@@ -468,10 +549,30 @@ _mk_cf_labels() {
     [ "$flat" = "$views" ] || views="$views$nl$flat"
   else
     printf 'unparsed\n'
+    flat=""
   fi
   if _mk_cf_has "$MK_CF_STATE_RE" "$views" i; then printf 'careful-state\n'; fi
   if _mk_cf_has "$MK_CF_STATE_GLOB_RE" "$views" i; then printf 'careful-state-glob\n'; fi
-  mk_careful_builtin "$views"
+  # The DYNRM exemption is decided ONCE, on the raw text: every view is ONE
+  # segment (fork-free test; a flat view that could not be built: not single)
+  # AND the whole raw command matches MK_CF_DYNEXEMPT (bash [[ =~ ]], no
+  # fork; a regex error is not a match). The flat view takes no part: it
+  # deletes quotes, backslashes, ( ) { } and backticks, the very characters
+  # that disqualify, so it could make a non-exempt line look exempt
+  # (grep x `$RM '' -rf y`).
+  # The RAW text must also be a single line (no newline at all, continuation
+  # lines included; they are never exempt): the locale gate checks the locale
+  # NAME, but bash may fall back to LANG's charset when LC_CTYPE names a
+  # locale that does not exist (en_US.utf8 + LANG=zh_TW.Big5). Without a
+  # newline there is no separator byte a double-byte charset could create or
+  # hide (_mk_cf_oneseg is byte-wise, LC_ALL=C; double-byte trail bytes may be
+  # 0x40-0xFE, so | 0x7C and a backslash 0x5C can be trail bytes, but " ' $
+  # never are).
+  one=0
+  if _mk_cf_oneseg "$1" && _mk_cf_oneseg "$joined" && _mk_cf_oneseg "$stripped" &&
+     [ "$flat" != "" ] && _mk_cf_oneseg "$flat" &&
+     _mk_cf_exempt "$joined"; then one=1; fi
+  mk_careful_builtin "$views" "$one"
   mk_careful_project "$views"
 }
 
