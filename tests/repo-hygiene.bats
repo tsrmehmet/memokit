@@ -35,6 +35,24 @@ load helpers
   grep -qF 'bumps `version` in `.claude-plugin/plugin.json`' "$MK_REPO/README.md"
   sed -n '1,4p' "$MK_REPO/CHANGELOG.md" | grep -qF '.claude-plugin/plugin.json'
 }
+@test "readme: Remote changes section documents memokit-window.sh request" {
+  sec="$(awk '/^## Remote changes/{p=1;next} /^## /{p=0} p' "$MK_REPO/README.md")"
+  [ -n "$sec" ]
+  for w in 'memokit-window.sh' 'request' 'change window' 'onaylıyorum' 'remote.log' 'close-window.sh'; do
+    printf '%s' "$sec" | grep -qF -- "$w" || { echo "$w"; false; }
+  done
+  grep -qF '`remote.hosts[]`' "$MK_REPO/README.md"
+  grep -qF '`careful.patterns[].target`' "$MK_REPO/README.md"
+}
+@test "changelog: 0.8.0 entry matches plugin.json version" {
+  v="$(jq -r .version "$MK_REPO/.claude-plugin/plugin.json")"
+  [ "$v" = "0.8.0" ]
+  sed -n '5,12p' "$MK_REPO/CHANGELOG.md" | grep -qF "## $v "
+  sec="$(awk '/^## 0\.8\.0/{p=1;next} /^## /{p=0} p' "$MK_REPO/CHANGELOG.md")"
+  for w in 'Remote changes (Part A)' 'Code-free cleanup (Part D)' 'init' 'Fixes' 'Measured'; do
+    printf '%s' "$sec" | grep -qF -- "$w" || { echo "$w"; false; }
+  done
+}
 @test "no references into docs/ from shipped files" {
   run bash -c "cd '$MK_REPO' && git grep -n -e 'docs/specs' -e 'docs/plans' -- . ':!docs/' ':!tests/repo-hygiene.bats'; test \$? -eq 1"
   [ "$status" -eq 0 ]

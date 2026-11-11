@@ -151,6 +151,31 @@
         }
       }
     },
+    "remote": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Remote-command guard and change windows. Absent: the guard is off. Present (even empty): deploy pushes and server changes need a user-approved change window.",
+      "properties": {
+        "deployBranches": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9._/-]+$" },
+          "description": "Branches whose push triggers a deploy (branch:<name> targets)."
+        },
+        "hosts": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "pattern": "^\\S+$" },
+          "description": "Hosts treated as production servers (host:<name> targets). A single * matches every host."
+        },
+        "readOnlyFirstWords": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9_.+]+(-[A-Za-z0-9_.+]+)?$" },
+          "description": "Remote commands whose first word (or first two, joined with a dash) is read-only and needs no window."
+        },
+        "windowMinutes": { "type": "integer", "minimum": 1, "maximum": 240, "default": 30, "description": "How long an approved change window stays open." },
+        "runbooksDir": { "type": "string", "pattern": "^(?!(.*/)?\\.{1,2}(/|$))(?!(.*/)?\\.[Gg][Ii][Tt](/|$))[A-Za-z0-9_.-][A-Za-z0-9._-]*(/[A-Za-z0-9_.-][A-Za-z0-9._-]*)*$", "default": ".claude/memokit/runbooks", "description": "Repo-relative directory of runbooks a change plan may reference." },
+        "log": { "type": "string", "pattern": "^(?!(.*/)?\\.{1,2}(/|$))(?!(.*/)?\\.[Gg][Ii][Tt](/|$))[A-Za-z0-9_.-][A-Za-z0-9._-]*(/[A-Za-z0-9_.-][A-Za-z0-9._-]*)*$", "default": "docs/DEPLOYS.md", "description": "Repo-relative file where closed windows are recorded." }
+      }
+    },
     "scratch": {
       "type": "object",
       "additionalProperties": false,
@@ -209,6 +234,11 @@
                 "type": "string",
                 "pattern": "^[a-z0-9][a-z0-9-]{0,31}$",
                 "description": "Short name shown in the deny message."
+              },
+              "target": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,31}$",
+                "description": "Optional change-window target name (pattern:<target>). When set, a user-approved change window for this target lets the matching command through."
               }
             }
           }

@@ -55,7 +55,7 @@ tool_payload() {
   jq -nc --arg t "$1" --arg a "${2:-}" --arg cwd "$PROJ" \
     '{tool_name:$t,tool_input:{prompt:"x"},cwd:$cwd} + (if $a=="" then {} else {agent_id:$a} end)'
 }
-prompt_payload() { jq -nc --arg p "$1" --arg cwd "$PROJ" '{prompt:$p,cwd:$cwd}'; }
+prompt_payload() { jq -nc --arg p "$1" --arg cwd "$PROJ" --arg s "${2-sess5}" '{prompt:$p,cwd:$cwd,session_id:$s}'; }
 
 # Negative assertion. Never start a bats line with `!` -- set -e ignores it.
 lacks() { if printf '%s' "$1" | grep -qF -- "$2"; then echo "unexpected: $2"; return 1; fi; }
@@ -116,3 +116,25 @@ legacy_project() {
   # extract-legacy compares vendored skills against $HOME/.claude/skills: never the real one.
   export HOME="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkhome.XXXXXX")"
 }
+
+# Worktree fixtures (worktrees.bats, careful-cleanup.bats): a throwaway repo
+# R on main with .claude/worktrees/ ignored; lanes under W.
+g() { git -C "$R" -c user.email=t@t -c user.name=t "$@"; }
+gw() { local d="$1"; shift; git -C "$d" -c user.email=t@t -c user.name=t "$@"; }
+
+wt_repo() {
+  R="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkwt.XXXXXX")"
+  R="$(cd -P "$R" && pwd -P)"
+  git -C "$R" init -q
+  g symbolic-ref HEAD refs/heads/main
+  printf '.claude/worktrees/\n' > "$R/.gitignore"
+  printf 'a\n' > "$R/a.txt"
+  g add -A; g commit -qm init
+  W="$R/.claude/worktrees"
+  export R W
+}
+# wt_add NAME BRANCH -- a worktree at $W/NAME on a new branch off main.
+wt_add() { g worktree add -q "$W/$1" -b "$2" main; }
+wt_commit() { printf '%s\n' "$2" > "$1/$2.txt"; gw "$1" add -A; gw "$1" commit -qm "$2"; }
+# ledger DIR RUN STATUS -- DIR/.claude/memokit/runs/RUN/ledger.md with that status.
+ledger() { mkdir -p "$1/.claude/memokit/runs/$2"; printf '# Run %s\n\nstatus: %s\nintegration: main\n' "$2" "$3" > "$1/.claude/memokit/runs/$2/ledger.md"; }

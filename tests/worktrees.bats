@@ -4,23 +4,8 @@ load helpers
 # branches without a worktree, classified against the current branch.
 # Every fixture is a throwaway repo under $BATS_TMPDIR.
 
-g() { git -C "$R" -c user.email=t@t -c user.name=t "$@"; }
-gw() { local d="$1"; shift; git -C "$d" -c user.email=t@t -c user.name=t "$@"; }
-
-wt_repo() {
-  R="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkwt.XXXXXX")"
-  R="$(cd -P "$R" && pwd -P)"
-  git -C "$R" init -q
-  g symbolic-ref HEAD refs/heads/main
-  printf '.claude/worktrees/\n' > "$R/.gitignore"
-  printf 'a\n' > "$R/a.txt"
-  g add -A; g commit -qm init
-  W="$R/.claude/worktrees"
-  export R W
-}
-# wt_add NAME BRANCH -- a worktree at $W/NAME on a new branch off main.
-wt_add() { g worktree add -q "$W/$1" -b "$2" main; }
-wt_commit() { printf '%s\n' "$2" > "$1/$2.txt"; gw "$1" add -A; gw "$1" commit -qm "$2"; }
+# g, gw, wt_repo, wt_add, wt_commit and ledger live in helpers.bash (shared
+# with careful-cleanup.bats).
 
 wt_list() {
   run "$MK_BASH" -c '. "$1/lib/common.sh"; . "$1/lib/worktrees.sh"; mk_wt_list "$2" ${3:+"$3"}; echo "rc=$?"' x "$HOOKS" "$@"
@@ -352,8 +337,6 @@ wt_proj() { wt_repo; mkdir -p "$R/.claude"; printf '%s' "$DEFAULT_CONFIG" > "$R/
 }
 
 # --- lanes of an active parallel run (final review I1) ------------------------
-# ledger DIR RUN STATUS -- DIR/.claude/memokit/runs/RUN/ledger.md with that status.
-ledger() { mkdir -p "$1/.claude/memokit/runs/$2"; printf '# Run %s\n\nstatus: %s\nintegration: main\n' "$2" "$3" > "$1/.claude/memokit/runs/$2/ledger.md"; }
 
 @test "lanes and branches of an active run are active-run (never offerable); count leaves them out and names the run" {
   wt_repo

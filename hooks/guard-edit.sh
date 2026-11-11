@@ -23,11 +23,27 @@ set -u
 # either way.
 # shellcheck source-path=SCRIPTDIR source=lib/common.sh
 . "$(dirname "$0")/lib/common.sh"
+# shellcheck source-path=SCRIPTDIR source=lib/budget.sh
+. "$(dirname "$0")/lib/budget.sh"
 PAYLOAD="$(cat)"
 # Hard kill-switch for emergencies: MEMOKIT_GUARD_OFF=1 disables the block.
 # Checked before anything else, including the empty-payload branch right
 # below, so the kill switch is a true unconditional override.
 mk_guard_off && exit 0
+
+# Hard budget (0.8.0 final wave; lib/budget.sh, as guard-destructive.sh),
+# armed before the first jq call (re-review N1: a jq that stalled in
+# mk_load_config kept this hook past the 5 s timeout): a command or a tool
+# that keeps the scan below busy past MK_GE_BUDGET_WALL s (or
+# MK_GE_BUDGET_CPU s of CPU) is denied with GE_BUDGET_STATIC before Claude
+# Code's 5 s hook timeout would let it run unchecked. Mode "zero": an
+# "exit 0" with no output still lets a command through; a crash (a non-zero
+# exit before a decision) denies with GE_CRASH_STATIC. Every deny below is
+# printed through the helper (once).
+MK_GE_BUDGET_WALL=3.3
+MK_GE_BUDGET_CPU=4
+mk_budget_arm "$MK_GE_BUDGET_WALL" "$MK_GE_BUDGET_CPU" GE_BUDGET_STATIC GE_CRASH_STATIC zero
+
 mk_resolve_root "$PAYLOAD"
 mk_active || exit 0
 mk_debug_dump "guard-edit" "$PAYLOAD"
@@ -39,11 +55,15 @@ mk_debug_dump "guard-edit" "$PAYLOAD"
 # can diagnose it from the reason text alone.
 if ! mk_load_config; then
   if [ "$MK_CONFIG_ERR" = "jq" ]; then
-    printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "PreToolUse",\n    "permissionDecision": "deny",\n    "permissionDecisionReason": "%s"\n  }\n}\n' "$(mk_msg CONFIG_NO_JQ_STATIC)"
+    mk_budget_static_deny CONFIG_NO_JQ_STATIC
     exit 0
   fi
-  jq -n --arg r "$(mk_msg CONFIG_INVALID "$MK_CONFIG_ERR")" \
-    '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+  if _ge_out="$(jq -n --arg r "$(mk_msg CONFIG_INVALID "$MK_CONFIG_ERR")" \
+      '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}' 2>/dev/null)" && [ -n "$_ge_out" ]; then
+    mk_budget_deny_json "$_ge_out"
+  else
+    mk_budget_static_deny GE_JQ_FAILED_STATIC
+  fi
   exit 0
 fi
 
@@ -74,7 +94,7 @@ if [ -z "$PAYLOAD" ]; then
   if [ "${MEMOKIT_KH_SMOKE:-0}" = "1" ]; then
     exit 0
   fi
-  printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "PreToolUse",\n    "permissionDecision": "deny",\n    "permissionDecisionReason": "%s"\n  }\n}\n' "$(mk_msg GE_EMPTY_STDIN_STATIC)"
+  mk_budget_static_deny GE_EMPTY_STDIN_STATIC
   exit 0
 fi
 
@@ -108,13 +128,18 @@ deny() {
   # substitution just above -- checking it directly would require
   # restructuring this into `if DENY_JSON=$(jq ...); then`, losing the
   # ability to also check `[ -n "$DENY_JSON" ]` in the same condition.
+  # Printed once through lib/budget.sh (decided, then printed), so the
+  # budget trap never adds a second deny.
   if [ $? -eq 0 ] && [ -n "$DENY_JSON" ]; then
-    printf '%s\n' "$DENY_JSON"
+    mk_budget_deny_json "$DENY_JSON"
   else
-    printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "PreToolUse",\n    "permissionDecision": "deny",\n    "permissionDecisionReason": "%s"\n  }\n}\n' "$(mk_msg GE_JQ_FAILED_STATIC)"
+    mk_budget_static_deny GE_JQ_FAILED_STATIC
   fi
   exit 0
 }
+
+# Test-only (MEMOKIT_TEST_BURN, lib/budget.sh; the budget is armed above).
+mk_budget_test_burn
 
 # True when directory $1 is the same inode as one of the guarded dirs under
 # root $2 (one of GUARD_ROOTS, see load_guard_roots below).
@@ -837,54 +862,7 @@ case "$CWD_RAW" in /*) BASEDIR="$CWD_RAW" ;; esac
 # accepted: a marker containing shell metacharacters beyond the ones
 # stripped here, or two heredocs opened on the same line, are not specially
 # handled.
-strip_heredoc_bodies() {
-  raw="$1"
-  out=""
-  heredoc_marker=""
-  in_heredoc=0
-  strip_tabs=0
-  while IFS= read -r line || [ -n "$line" ]; do
-    if [ "$in_heredoc" -eq 1 ]; then
-      trimmed="$line"
-      if [ "$strip_tabs" -eq 1 ]; then
-        while :; do
-          case "$trimmed" in
-            "$(printf '\t')"*) trimmed="${trimmed#?}" ;;
-            *) break ;;
-          esac
-        done
-      fi
-      if [ "$trimmed" = "$heredoc_marker" ]; then
-        in_heredoc=0
-        out="$out
-$line"
-      fi
-      continue
-    fi
-    out="$out
-$line"
-    case "$line" in
-      *'<<'*)
-        strip_tabs=0
-        case "$line" in *'<<-'*) strip_tabs=1 ;; esac
-        marker="$(printf '%s\n' "$line" | grep -oE '<<-?[[:space:]]*\\?["'"'"']?[A-Za-z_][A-Za-z0-9_]*["'"'"']?' 2>/dev/null | tail -n1)"
-        if [ -n "$marker" ]; then
-          m="${marker#<<}"; m="${m#-}"
-          # shellcheck disable=SC1003  # this IS the intended '"'"' embedded
-          # single-quote, not a mistaken escape attempt.
-          m="$(printf '%s' "$m" | tr -d '[:space:]"'"'"'\\' 2>/dev/null)"
-          if [ -n "$m" ]; then
-            heredoc_marker="$m"
-            in_heredoc=1
-          fi
-        fi
-        ;;
-    esac
-  done <<HDEOF
-$raw
-HDEOF
-  printf '%s' "${out#$'\n'}"
-}
+strip_heredoc_bodies() { mk_strip_heredoc_bodies "$1"; }
 
 # Extracts every candidate write-TARGET path from a (heredoc-stripped)
 # command string, one per output line.
@@ -895,29 +873,14 @@ find_bash_write_targets() {
   # `N>>`, `N>|`, `&>`, `&>>`. This also catches a heredoc-plus-redirect
   # combo like `cat > src/x <<EOF`, since the `>` is present regardless of
   # where the heredoc marker sits.
+  # Each match: everything up to its last '>' dropped, then the `|` of `>|`,
+  # then the blanks and tabs between the operator and the path (or "> src/a.cs"
+  # would resolve as "$BASEDIR/ src/a.cs"); a file-descriptor target
+  # (`2>&1`, `1>&2`) and an empty one are skipped. One sed and one grep for
+  # all matches (0.8.0 final wave: the per-match bash loop forked once per
+  # match and took seconds on 64 KiB of redirects).
   printf '%s' "$c" | grep -oE '[0-9]*(>>|>\||>|&>>|&>)[[:space:]]*[^[:space:];|&<>(){}`]+' 2>/dev/null | \
-  while IFS= read -r match; do
-    path="${match##*>}"
-    # `>|`: the `|` sits after the last '>' -- drop it before the trim.
-    path="${path#|}"
-    # The [[:space:]]* between the operator and the path is captured as
-    # part of $match but sits after the last '>', so it survives the
-    # ${match##*>} strip -- trim it or "> src/a.cs" resolves relative to
-    # "$BASEDIR/ src/a.cs" (leading space baked into the path).
-    while :; do
-      case "$path" in
-        " "*) path="${path# }" ;;
-        "$(printf '\t')"*) path="${path#?}" ;;
-        *) break ;;
-      esac
-    done
-    # `2>&1`, `1>&2`, ... redirect to a FILE DESCRIPTOR, not a file -- skip
-    # rather than pass "&1" through as a (harmless but noisy) non-match.
-    case "$path" in
-      '&'[0-9]*) continue ;;
-    esac
-    [ -n "$path" ] && printf '%s\n' "$path"
-  done
+    LC_ALL=C sed -e 's/^.*>//' -e 's/^|//' -e $'s/^[ \t]*//' 2>/dev/null | grep -vE '^(&[0-9]|$)' 2>/dev/null
 
   # Pass 2: named commands whose entire job is mutating files on disk.
   # Segmented the same way guard-subagent-authority.sh segments a command
@@ -930,8 +893,12 @@ find_bash_write_targets() {
   # shellcheck disable=SC2020  # intentional: each of \n ; | & is meant to
   # map to a newline individually (a set-to-set translation), not as a
   # 4-char "word" -- the duplicate targets are the point, not a mistake.
+  # Only a segment naming one of those commands as a word is read by the
+  # loop (one grep, a superset of what the loop matches; 0.8.0 final wave:
+  # 16 000 other lines cost a second of word splitting).
   SEGMENTS="$(printf '%s' "$c" | tr '\n;|&' '\n\n\n\n')"
-  printf '%s\n' "$SEGMENTS" | while IFS= read -r seg; do
+  printf '%s\n' "$SEGMENTS" | LC_ALL=C grep -E '(^|[^[:alnum:]_-])(tee|dd|sed|cp|mv|install|rsync|truncate|touch|mkdir|rm)([^[:alnum:]_-]|$)' 2>/dev/null |
+  while IFS= read -r seg; do
     [ -z "$seg" ] && continue
     # Intentional word splitting to tokenize. This is a heuristic,
     # whitespace-only split, not a real shell parser -- a quoted argument
@@ -1029,6 +996,21 @@ unquote_candidate() {
 
 CMD_CLEANED="$(strip_heredoc_bodies "$CMD")"
 CANDIDATES="$(find_bash_write_targets "$CMD_CLEANED")"
+# Each distinct candidate is classified once (first spelling kept, in
+# order); classify_path costs a few processes, so more than
+# MK_GE_MAX_TARGETS distinct candidates are too many to check inside the
+# budget: the main session is denied (GE_TOO_LARGE), a subagent passes as
+# for any guarded write. An awk that fails counts as too many.
+MK_GE_MAX_TARGETS=64
+if [ -n "$CANDIDATES" ]; then
+  _ge_n=""
+  if CANDIDATES="$(printf '%s\n' "$CANDIDATES" | LC_ALL=C awk 'NF && !seen[$0]++')" &&
+     _ge_n="$(printf '%s\n' "$CANDIDATES" | LC_ALL=C awk 'END { print NR }')"; then :; fi
+  case "$_ge_n" in ''|*[!0-9]*) _ge_n=999999 ;; esac
+  if [ "$_ge_n" -gt "$MK_GE_MAX_TARGETS" ]; then
+    handle_guarded_write "$(mk_msg GE_TOO_LARGE "$(mk_dirs_human)" "$(printf '%s\n' "$CMD" | sed -n 1p | cut -c1-300)")"
+  fi
+fi
 
 FOUND_GUARDED=0
 GUARDED_CANDIDATE=""

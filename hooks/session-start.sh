@@ -87,6 +87,7 @@ if ! mk_active; then
   exit 0
 fi
 
+mk_active_marker_write "$PAYLOAD" || true
 mk_load_config
 CONFIG_OK=$?
 

@@ -36,7 +36,7 @@ A subagent report is a **claim**, not evidence. Reports to the user carry the cl
 - New session: `/memokit:resume` (or the user says "devam et"/"continue").
 
 ## §5 Project overlays
-Project files in `.claude/memokit/` (`rules.md`, `coder.md`, `reviewer.md`, `analyst.md`, `gates.md`, `handoff.md`, `resume.md`, `triage.md`) add and narrow rules. They cannot loosen §1–§9.
+Project files in `.claude/memokit/` (`rules.md`, `coder.md`, `reviewer.md`, `analyst.md`, `gates.md`, `handoff.md`, `resume.md`, `triage.md`) add and narrow rules. They cannot loosen §1–§10.
 
 ## §6 Language
 Talk to the user in the project's `language` from `.claude/memokit.json`.
@@ -48,6 +48,8 @@ git -C "$REPO" ls-files -z -co --exclude-standard -- <paths> | (cd "$REPO" && xa
 ```
 - Work in ONE dedicated direct child of the scratchpad per task: `<scratchpad>/<role>-<slice>/` (name chars `A-Za-z0-9._@+,:%-`). Never write loose files into the scratchpad root.
 - Before returning, delete it with its own Bash call and a literal absolute path: `rm -rf <scratchpad>/<role>-<slice>` — repeat the expanded absolute path, never `$DEST` or any variable, no quotes, no trailing slash, no `&&`, `;`, pipes or `$(…)` (anything else needs the user's approval code).
+- The orchestrator deletes its own and its subagents' scratchpad dirs without a code also inside a chained or quoted command (`cd … && rm -rf "<scratchpad>/<dir>"`), when every `rm` target is the literal absolute path (no variable, `~`, glob or `$(…)`, no trailing slash) and every other part of the call is only `cd <literal path>`, `echo`, `printf`, `true`, `false`, `:`, `test`, `[`, `ls` or `pwd` (`cp`, `mv`, `ln`, `rsync`, `tar`, interpreters or anything else need the code), with no parentheses, `rm` redirected only to a literal path or an fd, and at most 16 targets.
+- The orchestrator also removes a finished lane worktree (`git worktree remove [--force] <path>` or `rm -rf <path>`, a literal path that `git worktree list` shows, never the main checkout) and deletes a merged lane branch (`git branch -D <name>`) without a code, when the worktree's branch is merged and it has no uncommitted change (ignored files do not count), and no worktree still checks the branch out. A dirty, unmerged or active-run worktree, a nested worktree and any git error still need the user's approval code. Subagents get none of this.
 - If the orchestrator asked you to keep it, put an empty `.memokit-keep` file in it and list the path in your report.
 - Every report ends with `temp left: <size>` (e.g. `temp left: 0`).
 - Mutation testing: copy once, then mutate and restore a file in that copy; never one full copy per mutation.
@@ -65,3 +67,9 @@ General rule, sequential and parallel work alike.
 - **Tier 2** (heavy gates: integration, coverage, merge gate, E2E): once per batch, only after the user explicitly approves. Ask "Tier-2 gates next, or more work first?"; never run it unasked.
 - A slice is `gate-pending` until Tier 2 is green; do not call it done before.
 - Tier commands come from `.claude/memokit/gates.md`. If it is missing, ask the user once and write it; never guess.
+
+## §10 Remote changes
+- Read-only on a server is free. A change (a push to a deploy branch, a server or cluster change, a runbook) needs an approved plan: what changes and where, how it is undone, how it is verified. One approval covers the whole plan; do not report command by command.
+- Inside the approved window carry out the plan's steps without asking again. A failed step stops the plan: report what failed and what you propose, and request a new window. A different action is a new plan and a new approval; never retry with a different command on your own.
+- After the plan, measure the verification and show it, and append one row to `remote.log` (default `docs/DEPLOYS.md`, created with a header on first use): `| date-time | code | targets | plan title (runbook name + hash) | result | verified by |`. The next handoff commits it.
+- Never hand the user a command to run themselves for a remote change (no `!` command, no pasted snippet): ask for the approval, then do it. A subagent never does any of this; approvals belong to the orchestrator.

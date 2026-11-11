@@ -1,0 +1,15 @@
+{
+  "cwd": "/tmp/placeholder-project",
+  "duration_ms": 120,
+  "effort": {"level": "medium"},
+  "error": "Exit code 3\nout\nerr",
+  "hook_event_name": "PostToolUseFailure",
+  "is_interrupt": false,
+  "permission_mode": "default",
+  "prompt_id": "prompt-placeholder",
+  "session_id": "sess-0001",
+  "tool_input": {"command": "ssh prod.example.com 'bad'"},
+  "tool_name": "Bash",
+  "tool_use_id": "tu-placeholder",
+  "transcript_path": "/tmp/placeholder-project/sess-0001.jsonl"
+}

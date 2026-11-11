@@ -53,11 +53,39 @@
 #
 # --- SAFETY (mk_temp_rm_safe decides which rm -rf targets skip approval) -----
 # CONTRACT: mk_temp_rm_safe judges the filesystem as it is AT CHECK TIME, and
-# nothing more. It is safe only when the caller guarantees that the whole Bash
-# command is one simple `rm` invocation, so no other segment can create,
-# remove or rename a path between this check and rm's execution (e.g.
+# nothing more. Another segment of the same Bash call could create, remove or
+# rename a path between this check and rm's execution (e.g.
 # `rm -rf sp/d && ln -s ~ sp/d && rm -rf sp/d/x` passes every per-target check
-# here, then follows the new link). careful.sh enforces that contract.
+# here, then follows the new link; `mv ~/Documents sp/x && rm -rf sp/x`
+# deletes a non-temp tree). So careful.sh (_mk_cf_labels, _mk_cf_rm) calls it
+# only when one of these holds:
+# - the whole command is one simple `rm` invocation (mk_careful_single_rm):
+#   the only form a subagent gets;
+# - the main session (payload without agent_id, MK_CF_MAIN=1 set by
+#   guard-destructive.sh) in a chained or quoted command, provided every
+#   segment on every view is either an rm whose command word is the segment's
+#   first word (rm, /bin/rm, /usr/bin/rm: no xargs, find -exec, sudo, env ...
+#   that could add targets) or one of the harmless commands cd (literal
+#   arguments only) echo printf true false : test [ ls pwd, and the command
+#   holds no backtick and no parenthesis at all (_mk_cf_cleanup_ok: $( ),
+#   <( ), zsh =(cmd) and glob qualifiers such as word(e:'cmd':) run code
+#   inside an allowlisted command). A positive allowlist: cp, rsync, tar,
+#   install, rename, mv, ln, interpreters, sh -c or anything unknown could
+#   put a non-temp tree where the rm then deletes. Every rm target must be a
+#   literal absolute path: no $ ` \ ~ ( ) or glob character, one pair of
+#   surrounding quotes at most, no "-..." operand after "--" or after a
+#   target, no glob in an option word; at most 16 targets per view; an rm
+#   redirection only to a literal absolute path or an fd dup (zsh reads <->
+#   and <1-99> as numeric globs, i.e. targets). Rule (a) then still allows
+#   only a direct child (no intermediate component a later segment could
+#   swap), the computed-word rule (MK_CF_DYNRM) is unchanged, and
+#   `rm -rf "$DIR"` asks.
+#   The exemption judges the command TEXT: code that the shell builds at run
+#   time (${(e)x}, ${!x}, zsh expansion flags) is outside it. Any $ in an rm
+#   target, a cd argument or an rm redirection, any parenthesis or backtick
+#   already disables it; what remains is run-time construction inside an
+#   allowlisted command's other arguments (echo ${!x}, printf -v) and
+#   zsh-only syntax without $, backtick or parentheses.
 # Even then a background job started by an EARLIER Bash call can swap a dir
 # for a symlink between this check and rm's execution, which no check-time
 # test can see. So rule (a) is narrowed to DIRECT children of the current

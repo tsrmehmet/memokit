@@ -115,3 +115,187 @@ GRAPH_EN='{"version":1,"project":{"name":"D","tag":"DMO"},"language":"en","graph
     ctx | grep -q '/memokit:triage' || { echo "no hint: $p"; false; }
   done
 }
+
+# --- 0.8.0 approval phrases, bare approval, change window ---------------
+# lib SNIPPET -- run SNIPPET with common.sh and careful.sh sourced in $PROJ.
+lib() {
+  run "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; . '$HOOKS/lib/careful.sh'; cd '$PROJ'; mk_resolve_root '{}'; mk_load_config >/dev/null; $1"
+}
+setup_appr() { mk_project; SID="appr$$-$BATS_TEST_NUMBER"; }
+
+@test "phrases: onay/onaylıyorum/approve/approved <code> all grant" {
+  setup_appr
+  for p in 'onay abc123' 'Onaylıyorum abc123' 'APPROVE abc123' 'approved abc123.'; do
+    run_hook inject-rules.sh "$(prompt_payload "$p" "$SID")"
+    ctx | grep -q 'abc123 kaydedildi' || { echo "no grant: $p"; false; }
+  done
+  lib 'mk_careful_pending_set "'$SID'" abc123'
+  run_hook inject-rules.sh "$(prompt_payload 'onay abc123' "$SID")"
+  ctx | grep -q 'abc123 kaydedildi'
+}
+@test "bare approval grants the single pending code" {
+  setup_appr
+  lib 'mk_careful_pending_set "'$SID'" abc123'
+  run_hook inject-rules.sh "$(prompt_payload 'onaylıyorum' "$SID")"
+  ctx | grep -q 'abc123 kaydedildi'
+  run_hook inject-rules.sh "$(prompt_payload 'onaylıyorum' "$SID")"
+  ctx | grep -q 'CAREFUL'
+  lacks "$(ctx)" 'kaydedildi'
+}
+@test "bare approval with trailing text does not grant" {
+  setup_appr
+  lib 'mk_careful_pending_set "'$SID'" abc123'
+  run_hook inject-rules.sh "$(prompt_payload 'onaylıyorum ama önce bak' "$SID")"
+  lacks "$(ctx)" 'CAREFUL'
+  lib 'mk_careful_pending_get "'$SID'"'; [ "$status" -eq 0 ]
+}
+@test "a code with targets opens a window and names targets and expiry" {
+  setup_appr
+  lib 'mk_careful_pending_set "'$SID'" abc123 "host:prod.example.com"'
+  run_hook inject-rules.sh "$(prompt_payload 'onay abc123' "$SID")"
+  ctx | grep -q 'host:prod.example.com'
+  ctx | grep -qE '[0-9]{2}:[0-9]{2}'
+  lib 'mk_careful_window_covers "'$SID'" host:prod.example.com'; [ "$status" -eq 0 ]
+  lib 'mk_careful_pending_get "'$SID'"'; [ "$status" -eq 1 ]
+}
+@test "a code unknown to pending is granted single-use as before" {
+  setup_appr
+  run_hook inject-rules.sh "$(prompt_payload 'approve abcdef' "$SID")"
+  ctx | grep -q 'abcdef kaydedildi'
+}
+@test "a code quoted on the second line grants nothing" {
+  setup_appr
+  run_hook inject-rules.sh "$(prompt_payload $'x\nonay abcdef' "$SID")"
+  lacks "$(ctx)" 'CAREFUL'
+}
+@test "flagged pending: bare approval is ambiguous, nothing opened" {
+  setup_appr
+  lib 'mk_careful_pending_set "'$SID'" aaaaaa host:a; mk_careful_pending_set "'$SID'" bbbbbb host:b'
+  run_hook inject-rules.sh "$(prompt_payload 'approve' "$SID")"
+  ctx | grep -q 'bbbbbb'; ctx | grep -q 'CAREFUL'
+  lacks "$(ctx)" 'host:b'
+  lib 'mk_careful_window_get "'$SID'"'; [ "$status" -eq 1 ]
+  lib 'mk_careful_pending_get "'$SID'"'; [ "$status" -eq 0 ]
+}
+@test "flagged pending: explicit code opens the window" {
+  setup_appr
+  lib 'mk_careful_pending_set "'$SID'" aaaaaa host:a; mk_careful_pending_set "'$SID'" bbbbbb host:b'
+  run_hook inject-rules.sh "$(prompt_payload 'onay bbbbbb' "$SID")"
+  ctx | grep -q 'host:b'
+  lib 'mk_careful_window_covers "'$SID'" host:b'; [ "$status" -eq 0 ]
+}
+@test "bare 'evet onayla' grants" {
+  setup_appr
+  lib 'mk_careful_pending_set "'$SID'" abc123'
+  run_hook inject-rules.sh "$(prompt_payload '  Evet onayla  ' "$SID")"
+  ctx | grep -q 'abc123 kaydedildi'
+}
+@test "no pending: message only, nothing is written" {
+  setup_appr
+  run_hook inject-rules.sh "$(prompt_payload 'approve' "$SID")"
+  ctx | grep -q 'CAREFUL'
+  lib 'mk_careful_window_get "'$SID'"'; [ "$status" -eq 1 ]
+}
+@test "empty session id works as unknown" {
+  setup_appr
+  lib 'mk_careful_pending_set unknown abc123 host:z'
+  run_hook inject-rules.sh "$(prompt_payload 'onay abc123' '')"
+  ctx | grep -q 'host:z'
+  lib 'mk_careful_window_covers unknown host:z'; [ "$status" -eq 0 ]
+}
+
+# --- fix round 1: exact phrases, no trailing text, unknown codes with remote ---
+RCFG='{"version":1,"project":{"name":"D","tag":"DMO"},"language":"tr","guardedDirs":["src"],"remote":{"hosts":["prod.example.com"]}}'
+# nothing_happened -- no window, no grants file, pending line still there.
+nothing_happened() {
+  lib 'mk_careful_window_get "'$SID'"'; [ "$status" -eq 1 ]
+  lib 'f="$(mk_careful_grants_file)"; [ ! -s "$f" ]'; [ "$status" -eq 0 ]
+  lib 'mk_careful_pending_get "'$SID'"'; [ "$status" -eq 0 ]
+}
+
+@test "refusals and look-alikes grant nothing and leave the pending line" {
+  setup_appr
+  lib 'mk_careful_pending_set "'$SID'" abc123 host:a'
+  for p in 'onaylamıyorum' 'onaylamıyorum abc123' 'onaylayamıyorum' 'onaylatmıyorum abc123' 'onaylxrum' 'onaylxrum abc123' 'ONAYLAMIYORUM'; do
+    run_hook inject-rules.sh "$(prompt_payload "$p" "$SID")"
+    lacks "$(ctx)" 'CAREFUL' || { echo "granted: $p"; false; }
+    nothing_happened
+  done
+}
+@test "onaylıyorum / onayliyorum / ONAYLIYORUM still grant, bare and with a code" {
+  setup_appr
+  for p in 'onaylıyorum' 'onayliyorum' 'ONAYLIYORUM' 'onaylıyorum abc123' 'ONAYLIYORUM abc123'; do
+    lib 'mk_careful_pending_set "'$SID'" abc123 host:a'
+    run_hook inject-rules.sh "$(prompt_payload "$p" "$SID")"
+    ctx | grep -q 'host:a' || { echo "no window: $p"; false; }
+    lib 'mk_careful_window_covers "'$SID'" host:a'; [ "$status" -eq 0 ]
+    lib 'mk_careful_window_close "'$SID'"'
+  done
+}
+@test "text after the code grants nothing; blanks and punctuation are fine" {
+  setup_appr
+  lib 'mk_careful_pending_set "'$SID'" abc123 host:a'
+  for p in 'approve abc123? no, do not' 'onay abc123 ama once bak' 'approve abc123, thanks' 'approve abc1234'; do
+    run_hook inject-rules.sh "$(prompt_payload "$p" "$SID")"
+    lacks "$(ctx)" 'CAREFUL' || { echo "granted: $p"; false; }
+    nothing_happened
+  done
+  run_hook inject-rules.sh "$(prompt_payload 'onay abc123!' "$SID")"
+  ctx | grep -q 'host:a'
+}
+@test "CRLF after a code or a bare phrase still counts" {
+  setup_appr
+  lib 'mk_careful_pending_set "'$SID'" abc123 host:a'
+  run_hook inject-rules.sh "$(prompt_payload $'onay abc123\r\nsecond' "$SID")"
+  ctx | grep -q 'host:a'
+  lib 'mk_careful_pending_set "'$SID'" abc123'
+  run_hook inject-rules.sh "$(prompt_payload $'approve\r' "$SID")"
+  ctx | grep -q 'abc123 kaydedildi'
+}
+@test "remote: an unknown code is refused, nothing written" {
+  mk_project "$RCFG"; SID="appr$$-$BATS_TEST_NUMBER"
+  run_hook inject-rules.sh "$(prompt_payload 'approve abcdef' "$SID")"
+  ctx | grep -q 'CAREFUL'; lacks "$(ctx)" 'abcdef'
+  lib 'f="$(mk_careful_grants_file)"; [ ! -e "$f" ]'; [ "$status" -eq 0 ]
+}
+@test "remote: a code differing from the pending one is refused, pending kept" {
+  mk_project "$RCFG"; SID="appr$$-$BATS_TEST_NUMBER"
+  lib 'mk_careful_pending_set "'$SID'" abc123 host:a'
+  run_hook inject-rules.sh "$(prompt_payload 'approve abcdef' "$SID")"
+  lacks "$(ctx)" 'host:a'
+  nothing_happened
+}
+@test "remote: an expired pending line with its code is refused" {
+  mk_project "$RCFG"; SID="appr$$-$BATS_TEST_NUMBER"
+  lib 'printf "%s\n" "abc123 1 host:a" > "$(mk_careful_pending_file "'$SID'")"'
+  run_hook inject-rules.sh "$(prompt_payload 'approve abc123' "$SID")"
+  ctx | grep -q 'CAREFUL'; lacks "$(ctx)" 'kaydedildi'
+  lib 'f="$(mk_careful_grants_file)"; [ ! -e "$f" ]'; [ "$status" -eq 0 ]
+}
+@test "no remote block: an unknown code is a single-use grant as before" {
+  setup_appr
+  run_hook inject-rules.sh "$(prompt_payload 'approve abcdef' "$SID")"
+  ctx | grep -q 'abcdef kaydedildi'
+  lib 'mk_careful_consume abcdef'; [ "$status" -eq 0 ]
+}
+@test "ambiguous bare approval writes no grants file" {
+  setup_appr
+  lib 'mk_careful_pending_set "'$SID'" aaaaaa host:a; mk_careful_pending_set "'$SID'" bbbbbb host:b'
+  run_hook inject-rules.sh "$(prompt_payload 'approve' "$SID")"
+  lib 'f="$(mk_careful_grants_file)"; [ ! -e "$f" ]'; [ "$status" -eq 0 ]
+}
+@test "no-target pending line is consumed on grant" {
+  setup_appr
+  lib 'mk_careful_pending_set "'$SID'" abc123'
+  run_hook inject-rules.sh "$(prompt_payload 'approve abc123' "$SID")"
+  ctx | grep -q 'abc123 kaydedildi'
+  lib 'mk_careful_pending_get "'$SID'"'; [ "$status" -eq 1 ]
+  lib 'mk_careful_consume abc123'; [ "$status" -eq 0 ]
+}
+@test "line-2 code leaves a targets pending untouched" {
+  setup_appr
+  lib 'mk_careful_pending_set "'$SID'" abc123 host:a'
+  run_hook inject-rules.sh "$(prompt_payload $'hello\napprove abc123' "$SID")"
+  lacks "$(ctx)" 'CAREFUL'
+  nothing_happened
+}

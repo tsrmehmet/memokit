@@ -301,3 +301,69 @@ GITC() { git -C "$PROJ" -c user.name=t -c user.email=t@t "$@"; }
   done
   [ -z "$(git -C "$PROJ" diff --cached --name-only)" ]
 }
+
+@test "remote-config writes the block and keeps other keys" {
+  mk_project none
+  printf '%s' '{"project":{"name":"p","tag":"PP"},"extra":1}' > "$PROJ/.claude/memokit.json"
+  run INIT remote-config "$PROJ" --branches deploy,public-release --hosts 10.0.0.1,prod.example.com; [ "$status" -eq 0 ]
+  jq -e '.remote == {"deployBranches":["deploy","public-release"],"hosts":["10.0.0.1","prod.example.com"],"runbooksDir":".claude/memokit/runbooks"}' "$PROJ/.claude/memokit.json"
+  jq -e '.project == {"name":"p","tag":"PP"} and .extra == 1' "$PROJ/.claude/memokit.json"
+}
+@test "remote-config refuses a bad branch name (exit 2)" {
+  mk_project none
+  printf '%s' '{"project":{"name":"p","tag":"PP"}}' > "$PROJ/.claude/memokit.json"
+  run INIT remote-config "$PROJ" --branches 'bad branch'; [ "$status" -eq 2 ]
+  run INIT remote-config "$PROJ" --branches 'a;b'; [ "$status" -eq 2 ]
+  run INIT remote-config "$PROJ" --hosts 'h o'; [ "$status" -eq 2 ]
+  jq -e 'has("remote")|not' "$PROJ/.claude/memokit.json"
+  [ ! -d "$PROJ/.claude/memokit/runbooks" ]
+}
+@test "remote-config creates runbooksDir with the README" {
+  mk_project none
+  printf '%s' '{"project":{"name":"p","tag":"PP"}}' > "$PROJ/.claude/memokit.json"
+  run INIT remote-config "$PROJ" --branches deploy; [ "$status" -eq 0 ]
+  [ -s "$PROJ/.claude/memokit/runbooks/README.md" ]
+  echo custom > "$PROJ/.claude/memokit/runbooks/README.md"
+  run INIT remote-config "$PROJ" --branches deploy; [ "$status" -eq 0 ]
+  [ "$(cat "$PROJ/.claude/memokit/runbooks/README.md")" = custom ]
+}
+@test "allow-tools merges Bash(...) rules into git-ignored settings.local.json without duplicates" {
+  mk_project none
+  printf '%s' '{"permissions":{"allow":["Bash(git status)"],"deny":["Workflow"]},"enabledPlugins":{"x@y":false}}' > "$PROJ/.claude/settings.local.json"
+  export GIT_CONFIG_GLOBAL=/dev/null XDG_CONFIG_HOME="$PROJ/.xdg"
+  run INIT allow-tools "$PROJ" 'Bash(ssh prod *)' 'Bash(git push origin deploy*)'; [ "$status" -eq 0 ]
+  jq -e '.permissions.allow == ["Bash(git push origin deploy*)","Bash(git status)","Bash(ssh prod *)"] and .permissions.deny == ["Workflow"] and .enabledPlugins["x@y"] == false' "$PROJ/.claude/settings.local.json"
+  git -C "$PROJ" check-ignore -q .claude/settings.local.json
+  run INIT allow-tools "$PROJ" 'Bash(ssh prod *)'; [ "$status" -eq 0 ]
+  jq -e '.permissions.allow | length == 3' "$PROJ/.claude/settings.local.json"
+  [ "$(grep -c 'settings.local.json' "$PROJ/.gitignore")" -eq 1 ]
+  run INIT allow-tools "$PROJ" 'Read(x)'; [ "$status" -eq 2 ]
+  run INIT allow-tools "$PROJ"; [ "$status" -eq 2 ]
+  run INIT allow-tools "$PROJ" 'Bash(ssh a *)' 'Bash(rm -rf /)x'; [ "$status" -eq 2 ]
+  jq -e '.permissions.allow | length == 3' "$PROJ/.claude/settings.local.json"
+}
+
+@test "allow-tools accepts only the ssh-host and git-push-branch shapes" {
+  mk_project none
+  export GIT_CONFIG_GLOBAL=/dev/null XDG_CONFIG_HOME="$PROJ/.xdg"
+  for bad in 'Bash(*)' 'Bash(bash *)' 'Bash(ssh * *)' 'Bash(ssh prod *; rm -rf /)' 'Bash(git push origin *)' 'Bash(ssh *)' 'Bash(git push origin a*b*)' 'Bash(git push origin a b*)' \
+             'Bash(ssh -x *)' 'Bash(ssh -oProxyCommand *)' 'Bash(git push origin -f*)' 'Bash(git push origin ../x*)' 'Bash(git push origin a/../b*)' 'Bash(git push origin a..b*)'; do
+    run INIT allow-tools "$PROJ" "$bad"; [ "$status" -eq 2 ]
+    [ -n "$output" ]
+  done
+  [ ! -e "$PROJ/.claude/settings.local.json" ]
+  run INIT allow-tools "$PROJ" 'Bash(ssh prod.example.com *)' 'Bash(git push origin deploy*)'; [ "$status" -eq 0 ]
+  run INIT allow-tools "$PROJ" 'Bash(ssh prod.example.com *)' 'Bash(git push origin deploy*)'; [ "$status" -eq 0 ]
+  jq -e '.permissions.allow == ["Bash(git push origin deploy*)","Bash(ssh prod.example.com *)"]' "$PROJ/.claude/settings.local.json"
+}
+@test "remote-config refuses a runbooksDir that escapes the project and creates nothing" {
+  mk_project none
+  for bad in '../../x' '/etc/y' 'a/.git/b' 'a/../b' '.git/x' 'a b'; do
+    jq -n --arg d "$bad" '{project:{name:"p",tag:"PP"},remote:{runbooksDir:$d}}' > "$PROJ/.claude/memokit.json"
+    run INIT remote-config "$PROJ" --branches deploy; [ "$status" -eq 2 ]
+  done
+  [ ! -e "$PROJ/x" ] && [ ! -e "$PROJ/a" ] && [ ! -e "$PROJ/.git/x" ]
+  printf '%s' '{"project":{"name":"p","tag":"PP"}}' > "$PROJ/.claude/memokit.json"
+  run INIT remote-config "$PROJ" --branches deploy; [ "$status" -eq 0 ]
+  [ -s "$PROJ/.claude/memokit/runbooks/README.md" ]
+}

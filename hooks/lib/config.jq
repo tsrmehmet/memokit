@@ -1,11 +1,17 @@
 # Validates .claude/memokit.json and emits shell assignments (quoted with @sh).
 def err($m): "MK_CONFIG_ERR=\($m | @sh)";
-def known: ["$schema","version","project","language","guardedDirs","contextBudget","stateStale","sessionStart","hints","graph","careful","scratch","disk","parallel","review"];
+def known: ["$schema","version","project","language","guardedDirs","contextBudget","stateStale","sessionStart","hints","graph","careful","remote","scratch","disk","parallel","review"];
 def builtin_all: ["debugging","decision","review","handoff","resume","graphify"];
 def dir_ok: type == "string"
   and test("^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$")
   and (test("(^|/)\\.\\.?(/|$)") | not)
-  and (. != ".git") and (startswith(".git/") | not);
+  and (test("(^|/)\\.git(/|$)"; "i") | not);
+# A .git segment at any depth, any case, is refused (I8, p21).
+# Like dir_ok, but a leading dot is allowed (".claude/...") for remote.runbooksDir / remote.log.
+def path_ok: type == "string"
+  and test("^[A-Za-z0-9_.-][A-Za-z0-9._-]*(/[A-Za-z0-9_.-][A-Za-z0-9._-]*)*$")
+  and (test("(^|/)\\.\\.?(/|$)") | not)
+  and (test("(^|/)\\.git(/|$)"; "i") | not);
 if type != "object" then err("not-object")
 elif .version != 1 then err("version")
 elif ((.project.name // null) | (type != "string") or (length == 0)) then err("project.name")
@@ -24,7 +30,16 @@ elif has("careful") and ((.careful | type) != "object"
     or ((.careful.patterns // []) | (type != "array") or any(.[];
          (type != "object")
          or ((.match | type) != "string") or ((.match | length) == 0)
-         or ((.label | type) != "string") or ((.label | test("^[a-z0-9][a-z0-9-]{0,31}$")) | not)))) then err("careful")
+         or ((.label | type) != "string") or ((.label | test("^[a-z0-9][a-z0-9-]{0,31}$")) | not)
+         or (has("target") and ((.target | type) != "string" or ((.target | test("^[a-z0-9][a-z0-9-]{0,31}$")) | not)))))) then err("careful")
+elif has("remote") and ((.remote | type) != "object"
+    or ((.remote | keys - ["deployBranches","hosts","readOnlyFirstWords","windowMinutes","runbooksDir","log"]) | length > 0)
+    or ((.remote.deployBranches // []) | (type != "array") or any(.[]; (type != "string") or (test("^[A-Za-z0-9._/-]+$") | not)))
+    or ((.remote.hosts // []) | (type != "array") or any(.[]; (type != "string") or (test("^\\S+$") | not)))
+    or ((.remote.readOnlyFirstWords // []) | (type != "array") or any(.[]; (type != "string") or (test("^[A-Za-z0-9_.+]+(-[A-Za-z0-9_.+]+)?$") | not)))
+    or ((.remote.windowMinutes // 30) | (type != "number") or (. != floor) or (. < 1) or (. > 240))
+    or ((.remote.runbooksDir // ".claude/memokit/runbooks") | path_ok | not)
+    or ((.remote.log // "docs/DEPLOYS.md") | path_ok | not)) then err("remote")
 elif has("scratch") and ((.scratch | type) != "object"
     or ((.scratch.agentMaxMB // 1024) | (type != "number") or (. < 1))
     or ((.scratch.staleAfterHours // 24) | (type != "number") or (. < 1))
@@ -53,6 +68,13 @@ else
     "MK_GRAPH_MAX_BEHIND=\((.graph.maxCommitsBehind // 20) | floor | tostring | @sh)",
     "MK_GRAPH_REFRESH_SCRIPT=\((.graph.refreshScript // "") | @sh)",
     "MK_CAREFUL_PATTERNS_JSON=\((.careful.patterns // []) | tojson | @sh)",
+    "MK_REMOTE_ENABLED=\(if has("remote") then "1" else "0" end | @sh)",
+    "MK_REMOTE_DEPLOY_BRANCHES=\((.remote.deployBranches // []) | join("\n") | @sh)",
+    "MK_REMOTE_HOSTS=\((.remote.hosts // []) | join("\n") | @sh)",
+    "MK_REMOTE_READONLY=\((.remote.readOnlyFirstWords // []) | join("\n") | @sh)",
+    "MK_REMOTE_WINDOW_MIN=\((.remote.windowMinutes // 30) | floor | tostring | @sh)",
+    "MK_REMOTE_RUNBOOKS_DIR=\((.remote.runbooksDir // ".claude/memokit/runbooks") | @sh)",
+    "MK_REMOTE_LOG=\((.remote.log // "docs/DEPLOYS.md") | @sh)",
     "MK_SCRATCH_AGENT_MAX_MB=\((.scratch.agentMaxMB // 1024) | floor | tostring | @sh)",
     "MK_SCRATCH_STALE_HOURS=\((.scratch.staleAfterHours // 24) | floor | tostring | @sh)",
     "MK_SCRATCH_REPORT_MIN_MB=\((.scratch.reportMinMB // 500) | floor | tostring | @sh)",

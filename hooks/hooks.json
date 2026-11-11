@@ -11,7 +11,7 @@
     "PreToolUse": [
       { "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
         "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/guard-edit.sh\"", "timeout": 5 } ] },
-      { "matcher": "Bash|Agent|Task|SendMessage",
+      { "matcher": "Bash|Agent|Task|SendMessage|Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/guard-subagent-authority.sh\"", "timeout": 5 } ] },
       { "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/guard-destructive.sh\"", "timeout": 5 } ] },
@@ -20,11 +20,15 @@
     ],
     "PostToolUse": [
       { "matcher": "Bash",
-        "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-disk.sh\"", "timeout": 5 } ] }
+        "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-disk.sh\"", "timeout": 5 } ] },
+      { "matcher": "Bash",
+        "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/close-window.sh\"", "timeout": 5 } ] }
     ],
     "PostToolUseFailure": [
       { "matcher": "Bash",
-        "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-disk.sh\"", "timeout": 5 } ] }
+        "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-disk.sh\"", "timeout": 5 } ] },
+      { "matcher": "Bash",
+        "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/close-window.sh\"", "timeout": 5 } ] }
     ],
     "Stop": [
       { "hooks": [

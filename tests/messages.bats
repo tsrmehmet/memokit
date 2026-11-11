@@ -72,3 +72,14 @@ keys() { grep -o '^MK_T_[A-Z0-9_]*' "$HOOKS/messages/$1.sh" | sort; }
   grep '^MK_T_GS_BRANCH_SWITCH=' "$HOOKS/messages/en.sh" | grep -qF 'by hand'
   grep '^MK_T_GS_BRANCH_SWITCH=' "$HOOKS/messages/tr.sh" | grep -qF 'elle'
 }
+
+@test "remote templates stay under 900 bytes" {
+  local n=0 f line
+  for f in en tr; do
+    while IFS= read -r line; do
+      n=$((n + 1))
+      [ "$(printf '%s' "$line" | wc -c)" -le 900 ] || { echo "$f: ${line%%=*} over 900 bytes"; false; }
+    done < <(grep '^MK_T_CF_REMOTE' "$HOOKS/messages/$f.sh")
+  done
+  [ "$n" -eq 10 ]
+}

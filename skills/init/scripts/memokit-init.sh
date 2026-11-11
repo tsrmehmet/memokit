@@ -359,18 +359,27 @@ cmd_settings() {
 # makes sure git ignores the file. Exit 2 on a name that is not a bare tool
 # name (nothing written).
 cmd_deny_tools() {
-  local root="${1:-}" target tmp t
+  local root="${1:-}" t
   if [ -z "$root" ] || [ ! -d "$root" ]; then printf 'deny-tools: no project root given\n' >&2; return 2; fi
   shift
   [ "$#" -gt 0 ] || { printf 'deny-tools: no tool name given\n' >&2; return 2; }
   for t in "$@"; do
     case "$t" in ''|[!A-Za-z]*|*[!A-Za-z0-9_]*) printf 'deny-tools: not a bare tool name: %s\n' "$t" >&2; return 2 ;; esac
   done
+  mk_local_permissions "$root" deny "$@"
+}
+
+# mk_local_permissions ROOT KEY RULE... -- merges RULEs into permissions.KEY
+# (allow|deny) of ROOT/.claude/settings.local.json: keeps every other key,
+# never duplicates a rule, and makes sure git ignores the file.
+mk_local_permissions() {
+  local root="$1" key="$2" target tmp
+  shift 2
   target="$root/.claude/settings.local.json"
   mkdir -p "$root/.claude"
   [ -f "$target" ] || printf '{}' > "$target"
   tmp="$(mktemp "${TMPDIR:-/tmp}/memokit-settings.XXXXXX")"
-  if ! jq --args '.permissions.deny = (((.permissions.deny // []) + $ARGS.positional) | unique)' "$@" < "$target" > "$tmp"; then
+  if ! jq --arg key "$key" --args '.permissions[$key] = (((.permissions[$key] // []) + $ARGS.positional) | unique)' "$@" < "$target" > "$tmp"; then
     rm -f "$tmp"; return 1
   fi
   mv "$tmp" "$target"
@@ -384,6 +393,91 @@ cmd_deny_tools() {
       printf 'ignored .claude/settings.local.json\n'
     fi
   fi
+}
+
+# ---------------------------------------------------------------------------
+# allow-tools <root> <rule>...
+# ---------------------------------------------------------------------------
+
+# Adds narrow Bash(...) allow rules (e.g. Bash(ssh prod *)) to
+# permissions.allow in the git-ignored .claude/settings.local.json. Exit 2 on
+# a rule that is not Bash(<plain words>) (nothing written).
+cmd_allow_tools() {
+  local root="${1:-}" r
+  if [ -z "$root" ] || [ ! -d "$root" ]; then printf 'allow-tools: no project root given\n' >&2; return 2; fi
+  shift
+  [ "$#" -gt 0 ] || { printf 'allow-tools: no rule given\n' >&2; return 2; }
+  for r in "$@"; do
+    # Only two shapes: Bash(ssh <host> *) and Bash(git push origin <branch>*).
+    case "$r" in
+      'Bash(ssh '*' *)')
+        r="${r#Bash(ssh }"; r="${r% \*)}"
+        # (a leading - would be an ssh option: -oProxyCommand, -F ...)
+        case "$r" in ''|-*|*[!A-Za-z0-9._:@-]*) printf 'allow-tools: invalid host in rule: %s\n' "$r" >&2; return 2 ;; esac ;;
+      'Bash(git push origin '*'*)')
+        r="${r#Bash(git push origin }"; r="${r%\*)}"
+        # (a leading - is a push option; .. is no branch name, git refuses it)
+        case "$r" in ''|-*|*..*|*[!A-Za-z0-9._/-]*) printf 'allow-tools: invalid branch in rule: %s\n' "$r" >&2; return 2 ;; esac ;;
+      *) printf 'allow-tools: only Bash(ssh <host> *) and Bash(git push origin <branch>*) are accepted: %s\n' "$r" >&2; return 2 ;;
+    esac
+  done
+  mk_local_permissions "$root" allow "$@"
+}
+
+# ---------------------------------------------------------------------------
+# remote-config <root> [--branches a,b] [--hosts h1,h2]
+# ---------------------------------------------------------------------------
+
+# Writes/updates the "remote" block of .claude/memokit.json (deployBranches,
+# hosts from the flags; runbooksDir defaults in), keeping every other key,
+# and creates the runbooks dir with its README (never overwritten). Exit 2 on
+# a branch or host outside the schema's character set (nothing written).
+cmd_remote_config() {
+  local root="${1:-}" cfg branches="" hosts="" item tmp rb b_json h_json
+  if [ -z "$root" ] || [ ! -d "$root" ]; then printf 'remote-config: no project root given\n' >&2; return 2; fi
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --branches) [ "$#" -ge 2 ] || { printf 'remote-config: --branches needs a value\n' >&2; return 2; }; branches="$2"; shift 2 ;;
+      --hosts) [ "$#" -ge 2 ] || { printf 'remote-config: --hosts needs a value\n' >&2; return 2; }; hosts="$2"; shift 2 ;;
+      *) printf 'remote-config: unknown argument: %s\n' "$1" >&2; return 2 ;;
+    esac
+  done
+  cfg="$root/.claude/memokit.json"
+  [ -f "$cfg" ] || { printf 'remote-config: %s not found (run write-config first)\n' "$cfg" >&2; return 2; }
+  b_json="$(jq -nc --arg v "$branches" '$v | split(",") | map(select(. != ""))')" || return 1
+  h_json="$(jq -nc --arg v "$hosts" '$v | split(",") | map(select(. != ""))')" || return 1
+  while IFS= read -r item; do
+    case "$item" in *[!A-Za-z0-9._/-]*) printf 'remote-config: invalid branch name: %s\n' "$item" >&2; return 2 ;; esac
+  done < <(printf '%s' "$b_json" | jq -r '.[]')
+  while IFS= read -r item; do
+    case "$item" in *[!A-Za-z0-9._:@*-]*) printf 'remote-config: invalid host: %s\n' "$item" >&2; return 2 ;; esac
+  done < <(printf '%s' "$h_json" | jq -r '.[]')
+  # Same rule as hooks/lib/config.jq path_ok, plus no .git segment anywhere.
+  rb="$(jq -r '.remote.runbooksDir // ".claude/memokit/runbooks"' "$cfg")" || return 1
+  if ! jq -en --arg p "$rb" '$p | type == "string"
+      and test("^[A-Za-z0-9_.-][A-Za-z0-9._-]*(/[A-Za-z0-9_.-][A-Za-z0-9._-]*)*$")
+      and (test("(^|/)\\.\\.?(/|$)") | not)
+      and (test("(^|/)\\.git(/|$)") | not)' >/dev/null; then
+    printf 'remote-config: runbooksDir must be a plain repo-relative path: %s\n' "$rb" >&2; return 2
+  fi
+  tmp="$(mktemp "${TMPDIR:-/tmp}/memokit-config.XXXXXX")"
+  if ! jq --argjson b "$b_json" --argjson h "$h_json" '
+      .remote = ((.remote // {})
+        | (if ($b|length) > 0 then .deployBranches = $b else . end)
+        | (if ($h|length) > 0 then .hosts = $h else . end)
+        | .runbooksDir = (.runbooksDir // ".claude/memokit/runbooks"))
+    ' "$cfg" > "$tmp"; then
+    rm -f "$tmp"; return 1
+  fi
+  mv "$tmp" "$cfg"
+  printf 'wrote %s\n' "$cfg"
+  mkdir -p "$root/$rb"
+  if [ ! -e "$root/$rb/README.md" ]; then
+    cp "$TEMPLATES_DIR/runbooks-README.md" "$root/$rb/README.md"
+    printf 'created %s/README.md\n' "$rb"
+  fi
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -903,6 +997,14 @@ case "${1:-}" in
     shift
     cmd_deny_tools "$@"
     ;;
+  allow-tools)
+    shift
+    cmd_allow_tools "$@"
+    ;;
+  remote-config)
+    shift
+    cmd_remote_config "$@"
+    ;;
   extract-legacy)
     shift
     cmd_extract_legacy "$@"
@@ -920,7 +1022,7 @@ case "${1:-}" in
     cmd_inventory "$@"
     ;;
   *)
-    printf 'usage: memokit-init.sh {detect|write-config|scaffold|settings|deny-tools|extract-legacy|remove|remove-legacy|inventory} <root> [args...]\n' >&2
+    printf 'usage: memokit-init.sh {detect|write-config|scaffold|settings|deny-tools|allow-tools|remote-config|extract-legacy|remove|remove-legacy|inventory} <root> [args...]\n' >&2
     exit 2
     ;;
 esac

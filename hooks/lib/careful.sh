@@ -13,8 +13,18 @@
 #
 # Recursive rm is also exempt inside the current session's temp scratchpad
 # and for a whole stale sibling temp entry (lib/temp.sh, mk_temp_rm_safe),
-# but only when the whole command is one simple rm (mk_careful_single_rm)
-# and the caller ran mk_temp_init (guard-destructive.sh does).
+# when the caller ran mk_temp_init (guard-destructive.sh does) and either the
+# whole command is one simple rm (mk_careful_single_rm), or the caller is the
+# main session (MK_CF_MAIN=1), every other segment on every view is an
+# allowlisted harmless command (_mk_cf_cleanup_ok), and every target is a
+# literal absolute path of an rm that is its segment's own command
+# (_mk_cf_rm, _mk_cf_lit; spec 0.8 Part D).
+# Lane cleanup (spec 0.8 Part D, goals 2-3), main session only, in
+# guard-destructive.sh's second labelling (MK_CF_WT=1): in the same shapes,
+# git-worktree-force and git-branch-delete are not printed and an rm target
+# that is a lane worktree is safe, when lib/worktrees.sh accepts the lane
+# (mk_wt_removable) or the branch (mk_wt_branch_removable); see
+# _mk_cf_gitseg_ok and _mk_cf_wt_skip.
 #
 # Every rule also runs on a flat view (mk_careful_flat) that undoes quoting,
 # escaping and grouping, so "rm", r''m, \rm, {rm,-rf,x} or (git reset --hard)
@@ -87,10 +97,22 @@ MK_CF_DYNEXEMPT="^[[:space:]]*${_mk_cf_exw}[[:space:]]+(${_mk_cf_exu})*\$"
 # common directory name.
 _mk_cf_mkglob='memokit-[^[:space:]/.]*[*?[]'
 _mk_cf_tmpword='(/tmp/|/private/tmp/|/var/folders/|tmpdir|careful)'
-MK_CF_STATE_RE="careful-grants|careful[^[:space:]/.]*[*?[][^[:space:]/.]*grant|${_mk_cf_tmpword}[^[:space:]]*${_mk_cf_mkglob}|${_mk_cf_mkglob}[^[:space:]]*${_mk_cf_tmpword}"
+MK_CF_STATE_RE="careful-grants|careful-pending|careful-window|careful-active|careful[^[:space:]/.]*[*?[][^[:space:]/.]*grant|${_mk_cf_tmpword}[^[:space:]]*${_mk_cf_mkglob}|${_mk_cf_mkglob}[^[:space:]]*${_mk_cf_tmpword}"
 MK_CF_STATE_GLOB_RE='careful[^[:space:]/.]*[*?[]|memokit-[^[:space:]/.]*[*?[]'
-# Set (as a local) only by mk_careful_labels; see _mk_cf_rm.
-_MK_CF_TEMP_OK=0
+# Set (as locals) only by _mk_cf_labels; see _mk_cf_rm.
+_MK_CF_TEMP_OK=0; _MK_CF_TEMP_LIT=0
+# 1 only when guard-destructive.sh sets it, after sourcing this file, for a
+# payload without agent_id (the main session). Reset here so the environment
+# can never set it.
+MK_CF_MAIN=0
+# Lane cleanup (spec 0.8 Part D, goals 2-3): MK_CF_WT=1 only in
+# guard-destructive.sh's second labelling of a main-session command whose
+# labels are all lane-cleanup labels, after it sourced lib/worktrees.sh;
+# MK_CF_CWD is then the payload cwd. Reset here, as MK_CF_MAIN. The memo
+# (_mk_cf_wt_ok, _mk_cf_br_ok) lives in one labelling subshell.
+MK_CF_WT=0
+MK_CF_CWD=""
+_MK_CF_WT_K=(); _MK_CF_WT_V=()
 
 # _mk_cf_has ERE TEXT [i] -- ERE test (case-insensitive with "i"), quiet.
 # Fail closed: a grep error (exit > 1) counts as a match.
@@ -139,7 +161,11 @@ _mk_cf_rule() {
 # or with no target at all. Parsing starts after the FIRST token that is the
 # rm command (rm, /bin/rm; not "git rm").
 _mk_cf_rm() {
-  local t u raw base prev="" started=0 skip=0 recursive=0 targets=0 unsafe=0 _f
+  local t u raw base prev="" started=0 skip=0 recursive=0 targets=0 unsafe=0 cw=0 dd=0 _f
+  # Byte-wise (also for mk_temp_rm_safe, which runs in a subshell from here):
+  # in a UTF-8 locale bash 3.2 runs pattern ops such as ${t%x} on a long
+  # token in super-linear time (a 60 KB target took seconds).
+  local LC_ALL=C
   local re_gitrm='git[[:space:]]+rm[[:space:]]'
   local re_rmr='(^|[^[:alnum:]_.-])rm[[:space:]]+(-[^[:space:]]*[rR]|--recursive)'
   case $- in *f*) _f=1 ;; *) _f=0 ;; esac
@@ -158,17 +184,46 @@ _mk_cf_rm() {
       case "$u" in
         rm|*/rm) [ "$prev" = git ] || started=1 ;;
       esac
+      # cw: rm is the segment's own command word, spelled plainly (for the
+      # literal rule below: no wrapper such as xargs or find -exec can add
+      # targets this parser does not see).
+      if [ "$started" -eq 1 ] && [ -z "$prev" ]; then
+        case "$t" in rm|/bin/rm|/usr/bin/rm) cw=1 ;; esac
+      fi
       prev="$t"
       continue
     fi
-    if [ "$skip" -eq 1 ]; then skip=0; continue; fi
+    # Literal rule (LIT mode; parentheses and backticks never reach it,
+    # _mk_cf_cleanup_ok refuses them): a redirection may only name a literal
+    # absolute path or duplicate an fd. Otherwise the word may be no
+    # redirection at all: zsh reads <-> and <1-99> as numeric globs, i.e.
+    # rm targets in the current directory.
+    if [ "$skip" -eq 1 ]; then
+      skip=0
+      if [ "${_MK_CF_TEMP_LIT:-0}" = 1 ] && ! _mk_cf_lit "$t"; then unsafe=1; fi
+      continue
+    fi
     raw="$t"
     case "$raw" in
       \"*|\'*) ;;
-      '>'|'>>'|[0-9]'>'|[0-9]'>>'|'&>'|'<') skip=1; continue ;;
-      [0-9]\>*|[0-9]\<*|\>*|\<*|\&\>*) continue ;;
+      '>'|'>>'|[0-9]'>'|[0-9]'>>'|'&>'|'&>>'|'<') skip=1; continue ;;
+      [0-9]\>*|[0-9]\<*|\>*|\<*|\&\>*)
+        if [ "${_MK_CF_TEMP_LIT:-0}" = 1 ] && ! _mk_cf_redir_ok "$raw"; then unsafe=1; fi
+        continue ;;
     esac
     t="${t#\"}"; t="${t#\'}"; t="${t%\)}"; t="${t%\`}"; t="${t%\"}"; t="${t%\'}"
+    # Literal rule: a "-..." word after "--" or after a target, or a lone
+    # "-", is a file operand (BSD rm stops at the first operand) that the
+    # cases below would skip as an option.
+    # An option word with a glob character (-*) expands like a target.
+    if [ "${_MK_CF_TEMP_LIT:-0}" = 1 ]; then
+      case "$t" in
+        -*)
+          if [ "$dd" -eq 1 ] || [ "$targets" -gt 0 ] || [ "$t" = - ]; then unsafe=1; fi
+          case "$t" in *[*?[]*) unsafe=1 ;; esac
+          [ "$t" = -- ] && dd=1 ;;
+      esac
+    fi
     case "$t" in
       '') continue ;;
       --r*) if [[ --recursive == "$t"* ]]; then recursive=1; fi; continue ;;
@@ -177,17 +232,31 @@ _mk_cf_rm() {
       -*) continue ;;
     esac
     targets=$((targets + 1))
-    base="${t%/}"; base="${base##*/}"
+    # Last component, from the last 256 bytes only: ${x##*/} is quadratic in
+    # the length even byte-wise, and a longer component is never a safelist
+    # name anyway.
+    base="${t%/}"
+    [ "${#base}" -le 256 ] || base="${base:${#base}-256}"
+    base="${base##*/}"
     case " $MK_CF_SAFE_RM " in
       *" $base "*) ;;
       *)
-        # Temp exemption (lib/temp.sh): only when mk_careful_labels has seen
-        # that the whole command is one simple rm (_MK_CF_TEMP_OK, local
-        # there) and mk_temp_init found this session's temp tree. Subshell:
-        # its entry listing needs globbing, which is off here.
-        # Once unsafe, no more subshells: the verdict cannot change.
+        # Temp exemption (lib/temp.sh): only when _mk_cf_labels allowed it
+        # (_MK_CF_TEMP_OK, local there) and mk_temp_init found this session's
+        # temp tree. Outside the single-rm form (_MK_CF_TEMP_LIT) the target
+        # must also be a plain literal of an rm that is the segment's own
+        # command (cw). Subshell: its entry listing needs globbing, which is
+        # off here. Once unsafe, no more subshells: the verdict cannot change.
+        # Lane worktree (spec 0.8 Part D): the same shape (_MK_CF_TEMP_OK),
+        # a literal absolute target of an rm that is its segment's own
+        # command, accepted by lib/worktrees.sh (_mk_cf_wt_ok: main session,
+        # second labelling only).
         if [ "$unsafe" -eq 0 ] && [ "${_MK_CF_TEMP_OK:-0}" = 1 ] && [ -n "${MK_TEMP_PROJECT_DIR:-}" ] &&
-           ( set +f; mk_temp_rm_safe "$t" ); then :; else unsafe=1; fi ;;
+           { [ "${_MK_CF_TEMP_LIT:-0}" != 1 ] || { [ "$cw" -eq 1 ] && _mk_cf_lit "$raw"; }; } &&
+           ( set +f; mk_temp_rm_safe "$t" ); then :
+        elif [ "${MK_CF_WT:-0}" = 1 ] && [ "$unsafe" -eq 0 ] && [ "${_MK_CF_TEMP_OK:-0}" = 1 ] &&
+             [ "$cw" -eq 1 ] && _mk_cf_lit "$raw" && _mk_cf_wt_ok "$t"; then :
+        else unsafe=1; fi ;;
     esac
   done
   [ "$_f" = 1 ] || set +f
@@ -198,6 +267,213 @@ _mk_cf_rm() {
     return 1
   fi
   [ "$recursive" -eq 1 ] && { [ "$unsafe" -eq 1 ] || [ "$targets" -eq 0 ]; }
+}
+
+# _mk_cf_lit WORD -- true when WORD, as written in the command, is a literal
+# absolute path: no $ ` \ ~ ( ) or glob character (* ? [) at all, and after
+# removing ONE pair of surrounding quotes it starts with "/" and holds no
+# quote. Pure bash, no fork.
+_mk_cf_lit() {
+  local w="$1" LC_ALL=C
+  case "$w" in *[\$\`\\~*?[\(\)]*) return 1 ;; esac
+  case "$w" in
+    \"*\") w="${w#\"}"; w="${w%\"}" ;;
+    \'*\') w="${w#\'}"; w="${w%\'}" ;;
+  esac
+  case "$w" in /*) ;; *) return 1 ;; esac
+  case "$w" in *[\"\']*) return 1 ;; esac
+  return 0
+}
+
+# _mk_cf_redir_ok WORD -- LIT mode: WORD is a redirection with its operand
+# glued on (>f, 2>>f, &>f, <f, 2>&1, >&2, <&3) whose operand is an fd number
+# (a dup) or a literal absolute path (_mk_cf_lit). Anything else, e.g. zsh's
+# numeric globs <-> and <1-99>, an fd close >&-, a relative or computed
+# operand, is not harmless.
+_mk_cf_redir_ok() {
+  local w="$1" LC_ALL=C
+  case "$w" in [0-9]*) w="${w#?}" ;; esac
+  case "$w" in
+    '&>>'*) w="${w#???}" ;;
+    '&>'*|'>>'*) w="${w#??}" ;;
+    '>'*|'<'*) w="${w#?}" ;;
+    *) return 1 ;;
+  esac
+  case "$w" in '&'[0-9]|'&'[0-9][0-9]) return 0 ;; esac
+  _mk_cf_lit "$w"
+}
+
+# _mk_cf_name WORD -- true when WORD, as written, is a literal branch name:
+# after removing ONE pair of surrounding quotes only [A-Za-z0-9._/-], not
+# empty, not starting with "-". Pure bash, no fork.
+_mk_cf_name() {
+  local w="$1" LC_ALL=C
+  case "$w" in \"*\"|\'*\') w="${w#?}"; w="${w%?}" ;; esac
+  case "$w" in ''|-*|*[!A-Za-z0-9._/-]*) return 1 ;; esac
+  return 0
+}
+
+# _mk_cf_wt_ok PATH -- the main session's second labelling (MK_CF_WT=1,
+# MK_CF_MAIN=1) and lib/worktrees.sh's mk_wt_removable accepts the absolute
+# PATH for the payload cwd (MK_CF_CWD), never the worktree holding the
+# project dir (MK_ROOT). Fork-free refusals first: a path longer than 4096
+# bytes, or one with no .git file in it (every linked worktree has one), is
+# no lane. Verdicts are memoised per labelling (each view asks again).
+_mk_cf_wt_ok() {
+  local i=0 v=1
+  [ "${MK_CF_WT:-0}" = 1 ] && [ "${MK_CF_MAIN:-0}" = 1 ] || return 1
+  [ "${#1}" -le 4096 ] || return 1
+  [ -f "$1/.git" ] && [ ! -L "$1" ] || return 1
+  while [ "$i" -lt "${#_MK_CF_WT_K[@]}" ]; do
+    if [ "${_MK_CF_WT_K[i]}" = "w$1" ]; then return "${_MK_CF_WT_V[i]}"; fi
+    i=$((i + 1))
+  done
+  if command -v mk_wt_removable >/dev/null 2>&1 &&
+     mk_wt_removable "$1" "${MK_CF_CWD:-}" ${MK_ROOT:+"$MK_ROOT"}; then v=0; fi
+  _MK_CF_WT_K[i]="w$1"; _MK_CF_WT_V[i]=$v
+  return "$v"
+}
+
+# _mk_cf_br_ok NAME GONE_PATH... -- as _mk_cf_wt_ok for a branch:
+# mk_wt_branch_removable accepts NAME for the payload cwd, a worktree that
+# still checks it out being allowed only when it is among GONE_PATH (lanes an
+# earlier segment of the command removes).
+_mk_cf_br_ok() {
+  local i=0 v=1 k="b$1" g nl='
+'
+  [ "${MK_CF_WT:-0}" = 1 ] && [ "${MK_CF_MAIN:-0}" = 1 ] || return 1
+  [ "${#1}" -le 1024 ] || return 1
+  for g in "${@:2}"; do k="$k$nl$g"; done
+  while [ "$i" -lt "${#_MK_CF_WT_K[@]}" ]; do
+    if [ "${_MK_CF_WT_K[i]}" = "$k" ]; then return "${_MK_CF_WT_V[i]}"; fi
+    i=$((i + 1))
+  done
+  if command -v mk_wt_branch_removable >/dev/null 2>&1 &&
+     mk_wt_branch_removable "$1" "${MK_CF_CWD:-}" "${@:2}"; then v=0; fi
+  _MK_CF_WT_K[i]="$k"; _MK_CF_WT_V[i]=$v
+  return "$v"
+}
+
+# _mk_cf_gitseg_ok WORD... -- the words after "git" in one segment are
+# exactly `worktree remove [--force|-f] <path>` with a literal absolute path
+# (_mk_cf_lit) that _mk_cf_wt_ok accepts (it is then added to _gone), or
+# `branch -D|-d|--delete [--force] <name>` with a literal name (_mk_cf_name)
+# that _mk_cf_br_ok accepts given _gone (sawbr=1 then). _gone and sawbr are
+# locals of _mk_cf_cleanup_ok, seen through dynamic scope.
+_mk_cf_gitseg_ok() {
+  local w
+  case "$1" in
+    worktree)
+      [ "${2:-}" = remove ] || return 1
+      shift 2
+      case "${1:-}" in --force|-f) shift ;; esac
+      [ "$#" -eq 1 ] && [ "${#1}" -le 4096 ] && _mk_cf_lit "$1" || return 1
+      w="$1"
+      case "$w" in \"*\"|\'*\') w="${w#?}"; w="${w%?}" ;; esac
+      _mk_cf_wt_ok "$w" || return 1
+      _gone[${#_gone[@]}]="$w" ;;
+    branch)
+      case "${2:-}" in -D|-d|--delete) ;; *) return 1 ;; esac
+      shift 2
+      [ "${1:-}" = --force ] && shift
+      [ "$#" -eq 1 ] && [ "${#1}" -le 1024 ] && _mk_cf_name "$1" || return 1
+      w="$1"
+      case "$w" in \"*\"|\'*\') w="${w#?}"; w="${w%?}" ;; esac
+      _mk_cf_br_ok "$w" ${_gone[@]+"${_gone[@]}"} || return 1
+      sawbr=1 ;;
+    *) return 1 ;;
+  esac
+  return 0
+}
+
+# MK_CF_LIT_MAX_TARGETS -- in the main session's compound form, a view with
+# more rm targets than this gets no exemption: each target costs a subshell
+# and stat calls per view, and a long list would end in the budget deny.
+MK_CF_LIT_MAX_TARGETS=16
+
+# _mk_cf_cleanup_ok VIEW -- true when every segment of VIEW (split by
+# mk_careful_segments, quotes not parsed) has as its command word (its first
+# token, leading { removed; tokens made only of { } skipped) rm, /bin/rm,
+# /usr/bin/rm, or one of the harmless commands cd echo printf true false :
+# test [ ls pwd, every cd argument is literal (no $ ` * ? [), and the rm
+# segments hold at most MK_CF_LIT_MAX_TARGETS words that are no option or
+# redirection. Called once per view.
+# A positive allowlist (security review of Task 9): any other command (cp,
+# rsync, tar, install, rename, mv, ln, an interpreter, sh -c, sudo, env,
+# NAME=value, a quoted or computed word, anything unknown) could put a
+# non-temp tree where the exempt rm then deletes, so it gives no exemption.
+# A backtick or ANY parenthesis also gives none: $( ) <( ) >( ) and zsh's
+# =(cmd) and glob qualifiers (word(e:'cmd':), legal even without a wildcard)
+# run code inside an allowlisted command; a subshell group asks too.
+# The rm segments' targets are judged by _mk_cf_rm. Fail closed: the split
+# text must come back between a leading and a trailing sentinel line, so a
+# splitter that did not start or did not run to its end -> false.
+# Lane cleanup (spec 0.8 Part D): in the main session's second labelling
+# (MK_CF_WT=1, MK_CF_MAIN=1) a segment whose command word is git is accepted
+# too, when its other words (at most 4) pass _mk_cf_gitseg_ok: one literal
+# lane worktree removal or one literal merged-branch deletion that
+# lib/worktrees.sh allows. A branch deletion in a command that also holds a
+# cd segment is refused (cd may enter another repository, where the branch
+# was never checked). Any other git segment: false, as before.
+_mk_cf_cleanup_ok() {
+  local segs seg t w iscd isrm isgit n=0 rc=0 _f sawcd=0 sawbr=0 tok="mk-sentinel-$$-$RANDOM-$RANDOM" nl='
+'
+  local -a gt=() _gone=()
+  # Byte-wise, and the whole-text test is one regex (linear), not a case
+  # glob: bash 3.2 pattern matching on a long text is super-linear in UTF-8.
+  # The sentinels are checked with substrings, not pattern ops, for the same
+  # reason.
+  local LC_ALL=C re='[`()]' re_lead='^[{]*(.*)$'
+  [[ $1 =~ $re ]] && return 1
+  segs="$(mk_careful_segments "$tok$nl$1$nl$tok")"
+  [ "${#segs}" -gt $((2 * ${#tok} + 1)) ] || return 1
+  [ "${segs:0:${#tok}+1}" = "$tok$nl" ] || return 1
+  [ "${segs:${#segs}-${#tok}-1}" = "$nl$tok" ] || return 1
+  segs="${segs:${#tok}+1:${#segs}-2*${#tok}-2}"
+  case $- in *f*) _f=1 ;; *) _f=0 ;; esac
+  set -f
+  while IFS= read -r seg; do
+    w=""; iscd=0; isrm=0; isgit=0; gt=()
+    # shellcheck disable=SC2086  # word splitting is intended; globbing is off (set -f)
+    for t in $seg; do
+      if [ -z "$w" ]; then
+        case "$t" in *[!\{\}]*) ;; *) continue ;; esac
+        w="$t"; [[ $t =~ $re_lead ]] && w="${BASH_REMATCH[1]}"
+        case "$w" in
+          rm|/bin/rm|/usr/bin/rm) isrm=1 ;;
+          echo|printf|true|false|:|test|'['|ls|pwd) break ;;
+          cd) iscd=1; sawcd=1 ;;
+          git)
+            if [ "${MK_CF_WT:-0}" = 1 ] && [ "${MK_CF_MAIN:-0}" = 1 ]; then isgit=1; else rc=1; break; fi ;;
+          *) rc=1; break ;;
+        esac
+        continue
+      fi
+      if [ "$isgit" -eq 1 ]; then
+        [ "${#gt[@]}" -lt 4 ] || { rc=1; break; }
+        gt[${#gt[@]}]="$t"
+        continue
+      fi
+      if [ "$isrm" -eq 1 ]; then
+        case "$t" in
+          -*|*[\<\>]*) ;;
+          *) n=$((n + 1)); [ "$n" -le "$MK_CF_LIT_MAX_TARGETS" ] || { rc=1; break; } ;;
+        esac
+        continue
+      fi
+      [ "$iscd" -eq 1 ] || break
+      case "$t" in *[\$\`*?[]*) rc=1; break ;; esac
+    done
+    if [ "$rc" -eq 0 ] && [ "$isgit" -eq 1 ]; then
+      _mk_cf_gitseg_ok ${gt[@]+"${gt[@]}"} || rc=1
+    fi
+    [ "$rc" -eq 0 ] || break
+  done <<EOF
+$segs
+EOF
+  [ "$_f" = 1 ] || set +f
+  if [ "$sawbr" -eq 1 ] && [ "$sawcd" -eq 1 ]; then rc=1; fi
+  return "$rc"
 }
 
 # mk_careful_join CMD -- join backslash-newline continuation lines the way bash
@@ -231,7 +507,8 @@ mk_careful_strip() {
 #   ( ) { } ` -> blank              (git reset --hard)  -> " git reset --hard "
 #   .exe dropped from a word        kubectl.exe delete  -> kubectl delete
 #   rm git kubectl helm docker      RM -rf x, Git push  -> rm -rf x, git push
-#     dotnet in any case -> lower   (not after $: $GIT stays a variable)
+#     dotnet ssh scp sftp rsync gh  (not after $: $GIT stays a variable)
+#     in any case -> lower           (the last five for lib/remote.sh)
 #     Only the leading boundary is matched, so no separator is consumed and
 #     an adjacent word (echo rm;RM) is not skipped. A longer word's prefix
 #     is lowercased too (RMDIR -> rmDIR): harmless, as every rule needs the
@@ -255,6 +532,11 @@ mk_careful_flat() {
     -e 's/(^|[^[:alnum:]_.$-])[Hh][Ee][Ll][Mm]/\1helm/g' \
     -e 's/(^|[^[:alnum:]_.$-])[Dd][Oo][Cc][Kk][Ee][Rr]/\1docker/g' \
     -e 's/(^|[^[:alnum:]_.$-])[Dd][Oo][Tt][Nn][Ee][Tt]/\1dotnet/g' \
+    -e 's/(^|[^[:alnum:]_.$-])[Ss][Ss][Hh]/\1ssh/g' \
+    -e 's/(^|[^[:alnum:]_.$-])[Ss][Cc][Pp]/\1scp/g' \
+    -e 's/(^|[^[:alnum:]_.$-])[Ss][Ff][Tt][Pp]/\1sftp/g' \
+    -e 's/(^|[^[:alnum:]_.$-])[Rr][Ss][Yy][Nn][Cc]/\1rsync/g' \
+    -e 's/(^|[^[:alnum:]_.$-])[Gg][Hh]/\1gh/g' \
     -e 's/[;|]/ & /g' -e 's/([^0-9&<> ])([<>])/\1 \2/g' \
     -e 's/([^&<> ])&/\1 \&/g' -e 's/ &([^&>])/ \& \1/g')" || return 1
   case "$out" in *"$nl$tok") printf '%s' "${out%"$nl$tok"}" ;; *) return 1 ;; esac
@@ -303,6 +585,18 @@ _mk_cf_oneseg() {
   return 0
 }
 
+# _mk_cf_wt_skip -- the git-branch-delete and git-worktree-force rules print
+# nothing: the main session's second labelling (MK_CF_WT=1, MK_CF_MAIN=1)
+# found the whole command in the main-session literal shape
+# (_MK_CF_TEMP_LIT, a local of _mk_cf_labels), so _mk_cf_cleanup_ok saw on
+# every view only allowlisted harmless segments, rm segments (judged by
+# _mk_cf_rm) and git segments each of which is one lane removal or branch
+# deletion that lib/worktrees.sh allows. A rule match in an allowlisted
+# segment (echo git branch -D x) runs nothing.
+_mk_cf_wt_skip() {
+  [ "${MK_CF_WT:-0}" = 1 ] && [ "${MK_CF_MAIN:-0}" = 1 ] && [ "${_MK_CF_TEMP_LIT:-0}" = 1 ]
+}
+
 # mk_careful_builtin CMD [ONE] -- builtin labels the command matches, one per line
 # (careful-state is checked by mk_careful_labels). A failing stage prints
 # unparsed and falls back to the unprocessed text, so no rule is skipped.
@@ -348,11 +642,11 @@ mk_careful_builtin() {
        '[[:space:]](-f|--force)([[:space:]]|$)' ||
      _mk_cf_rule "$segs" "$(_mk_cf_cmdre git branch)" \
        '[[:space:]]-[a-zA-Z]*(d[a-zA-Z]*f|f[a-zA-Z]*d)[a-zA-Z]*([[:space:]]|$)'; then
-    printf 'git-branch-delete\n'
+    _mk_cf_wt_skip || printf 'git-branch-delete\n'
   fi
   if _mk_cf_rule "$segs" "$(_mk_cf_cmdre git worktree)" '[[:space:]]remove([[:space:]]|$)' \
        "[[:space:]]($MK_CF_FORCE|-[a-zA-Z]*f[a-zA-Z]*)([[:space:]]|\$)"; then
-    printf 'git-worktree-force\n'
+    _mk_cf_wt_skip || printf 'git-worktree-force\n'
   fi
   if _mk_cf_rule "$segs" "$(_mk_cf_cmdre git 'checkout|restore')" '[[:space:]]\.([[:space:]]|$)' \
        '![[:space:]](--staged|-S)([[:space:]]|$)' ||
@@ -480,10 +774,19 @@ mk_careful_single_rm() {
 }
 
 # mk_careful_labels CMD -- builtin + project labels, de-duplicated, in order,
-# without awk: the de-duplication itself cannot lose a label.
+# without awk: the de-duplication itself cannot lose a label. The labelling
+# runs in a subshell behind a per-call sentinel: one that did not run to its
+# end (killed by the guard's CPU budget, a crash) reads as unparsed, never as
+# "no label" (fix round 4).
 mk_careful_labels() {
-  local out l seen=" "
-  out="$(_mk_cf_labels "$1")"
+  local out l seen=" " tok="mk-sentinel-$$-$RANDOM-$RANDOM" nl='
+'
+  out="$(_mk_cf_labels "$1"; printf '%s\n' "$tok")"
+  case "$out" in
+    "$tok") out="" ;;
+    *"$nl$tok") out="${out%"$nl$tok"}" ;;
+    *) out="$out${nl}unparsed" ;;
+  esac
   while IFS= read -r l; do
     [ -n "$l" ] || continue
     case "$seen" in *" $l "*) continue ;; esac
@@ -498,7 +801,7 @@ EOF
 # that fails or comes back empty prints unparsed and the next stage works on
 # the unprocessed text, so a broken tool never turns into "no label".
 _mk_cf_labels() {
-  local t n tok joined stripped views flat one _MK_CF_TEMP_OK=0 nl='
+  local t n tok joined stripped views flat one _rm_scan _MK_CF_TEMP_OK=0 _MK_CF_TEMP_LIT=0 nl='
 '
   # careful-state first, before any other stage can fail, and also when the
   # command is too-large (approvable; careful-state never is): one grep -c on
@@ -536,11 +839,6 @@ _mk_cf_labels() {
       *) printf 'unparsed\n'; stripped="$1" ;;
     esac ;;
   esac
-  # Seen by _mk_cf_rm through dynamic scope; never set anywhere else.
-  if [ -n "${MK_TEMP_PROJECT_DIR:-}" ] && [ "$joined" = "$stripped" ] &&
-     mk_careful_single_rm "$1"; then
-    _MK_CF_TEMP_OK=1
-  fi
   # All views in one text: every rule is per line or "anywhere in the text",
   # so one pass over it is the union of a pass per view.
   views="$joined"
@@ -550,6 +848,23 @@ _mk_cf_labels() {
   else
     printf 'unparsed\n'
     flat=""
+  fi
+  # The temp exemption, seen by _mk_cf_rm through dynamic scope; never set
+  # anywhere else. The single-rm form (main session or subagent) as before;
+  # for the main session also any other shape, with literal targets only
+  # (_MK_CF_TEMP_LIT) and only allowlisted commands beside rm, checked per
+  # view (joined, and flat when it differs; stripped equals joined here) by
+  # _mk_cf_cleanup_ok. Fail closed: a flat view that could not be built
+  # gives no exemption. The same shape gates the lane cleanup (MK_CF_WT, the
+  # main session's second labelling), which needs no temp tree: _mk_cf_rm's
+  # temp check still requires one, its worktree check does not.
+  if { [ -n "${MK_TEMP_PROJECT_DIR:-}" ] || [ "${MK_CF_WT:-0}" = 1 ]; } && [ "$joined" = "$stripped" ]; then
+    if mk_careful_single_rm "$1"; then
+      _MK_CF_TEMP_OK=1
+    elif [ "${MK_CF_MAIN:-0}" = 1 ] && [ -n "$flat" ] && _mk_cf_cleanup_ok "$joined" &&
+         { [ "$flat" = "$joined" ] || _mk_cf_cleanup_ok "$flat"; }; then
+      _MK_CF_TEMP_OK=1; _MK_CF_TEMP_LIT=1
+    fi
   fi
   if _mk_cf_has "$MK_CF_STATE_RE" "$views" i; then printf 'careful-state\n'; fi
   if _mk_cf_has "$MK_CF_STATE_GLOB_RE" "$views" i; then printf 'careful-state-glob\n'; fi
@@ -574,6 +889,27 @@ _mk_cf_labels() {
      _mk_cf_exempt "$joined"; then one=1; fi
   mk_careful_builtin "$views" "$one"
   mk_careful_project "$views"
+  # Remote labels (lib/remote.sh, the label column of each scan line), only
+  # with a "remote" config; remote.sh is loaded here when the caller has not.
+  # Fail closed: it cannot be loaded, or the scan does not run to its end
+  # (mk_remote_scan_checked's sentinel) -> unparsed.
+  if [ "${MK_REMOTE_ENABLED:-0}" = 1 ]; then
+    if ! command -v mk_remote_scan_checked >/dev/null 2>&1 &&
+       [ -n "${MK_LIB_DIR:-}" ] && [ -f "$MK_LIB_DIR/remote.sh" ]; then
+      # shellcheck source-path=SCRIPTDIR source=remote.sh
+      . "$MK_LIB_DIR/remote.sh" 2>/dev/null
+    fi
+    if command -v mk_remote_scan_checked >/dev/null 2>&1; then
+      mk_remote_scan_checked "$1" || true
+      while IFS= read -r t; do
+        if [ -n "$t" ]; then printf '%s\n' "${t%%$'\t'*}"; fi
+      done <<EOF
+$_rm_scan
+EOF
+    else
+      printf 'unparsed\n'
+    fi
+  fi
 }
 
 # mk_careful_bad_patterns -- labels of project patterns grep -E rejects.
@@ -634,4 +970,212 @@ mk_careful_consume() {
   done < "$f"
   mv "$tmp" "$f" || { rm -f "$tmp"; return 1; }
   return "$found"
+}
+
+# mk_careful_targets_code TARGETS -- approval code for a plan: TARGETS is a
+# newline-separated list, sorted and de-duplicated (LC_ALL=C) so the order the
+# model names them in does not matter. Bound to the project root like
+# mk_careful_code.
+mk_careful_targets_code() {
+  local list
+  list="$(printf '%s\n' "$1" | LC_ALL=C sort -u | sed '/^$/d')"
+  printf '%s\n%s' "$MK_ROOT" "$list" | _mk_cf_sha256 | cut -c1-6
+}
+
+# _mk_cf_words LIST -- newline list -> sorted unique targets on one line,
+# space-separated. Fails (exit 1) on an empty list or a target holding
+# whitespace or a glob character (* ? [ ]), so a line in the pending/window files is always plain words.
+_mk_cf_words() {
+  local list flat
+  flat="$(printf '%s' "$1" | tr -d '\n')"
+  case "$flat" in
+    *[[:space:]]*|*'*'*|*'?'*|*'['*|*']'*) return 1 ;;
+  esac
+  list="$(printf '%s\n' "$1" | LC_ALL=C sort -u | sed '/^$/d' | tr '\n' ' ')"
+  [ -n "$list" ] || return 1
+  printf '%s' "${list% }"
+}
+
+# _mk_cf_write FILE LINE -- replace FILE atomically (mktemp + mv, umask 077)
+# with the single line LINE. Refuses an unsafe (symlinked / foreign) FILE and
+# a path that is not absolute (mk_tmp printed nothing: a broken sed).
+_mk_cf_write() {
+  local f="$1" tmp
+  case "$f" in /?*) ;; *) return 1 ;; esac
+  _mk_cf_unsafe "$f" && return 1
+  [ -d "$f" ] && return 1
+  tmp="$( umask 077; mktemp "$f.XXXXXX" 2>/dev/null )" || return 1
+  [ -n "$tmp" ] || return 1
+  printf '%s\n' "$2" > "$tmp" || { rm -f "$tmp"; return 1; }
+  mv "$tmp" "$f" || { rm -f "$tmp"; return 1; }
+}
+
+# mk_careful_pending_file SESSION -- the session's pending plan file.
+mk_careful_pending_file() {
+  mk_tmp "careful-pending-$(printf '%s' "$1" | tr -c 'A-Za-z0-9_-' _)"
+}
+
+# mk_careful_pending_set SESSION CODE [TARGETS] -- remember the plan code the
+# user is asked to approve: one line "<code> <expiry>[!] <targets...>"
+# (TARGETS a newline list, may be empty), valid MK_CF_TTL seconds, replacing
+# any earlier line of this session. The expiry carries a trailing "!" when
+# this set REPLACED a different unexpired code (or a flagged line of the same
+# code): two codes were shown to the user, so a bare approval must not pick
+# one; only "onay <code>" grants a flagged line.
+mk_careful_pending_set() {
+  local f words="" exp old oc oe flag=""
+  f="$(mk_careful_pending_file "$1")"
+  _mk_cf_unsafe "$f" && return 1
+  case "$2" in ''|*[!0-9a-fA-F]*) return 1 ;; esac
+  if [ -n "${3:-}" ]; then words="$(_mk_cf_words "$3")" || return 1; fi
+  if old="$(mk_careful_pending_get "$1")"; then
+    oc="${old%% *}"; oe="${old#* }"; oe="${oe%% *}"
+    if [ "$oc" != "$2" ]; then flag="!"; fi
+    case "$oe" in *!) flag="!" ;; esac
+  fi
+  exp="$(( $(date +%s) + MK_CF_TTL ))"
+  _mk_cf_write "$f" "$2 $exp$flag${words:+ $words}"
+}
+
+# mk_careful_pending_req_file SESSION -- sibling of the pending file holding
+# the code a memokit-window.sh request minted in this session.
+mk_careful_pending_req_file() {
+  mk_tmp "careful-pending-req-$(printf '%s' "$1" | tr -c 'A-Za-z0-9_-' _)"
+}
+
+# mk_careful_pending_req_set SESSION CODE -- record that a request minted CODE.
+mk_careful_pending_req_set() {
+  case "$2" in ''|*[!0-9a-fA-F]*) return 1 ;; esac
+  _mk_cf_write "$(mk_careful_pending_req_file "$1")" "$2 $(( $(date +%s) + MK_CF_TTL ))"
+}
+
+# mk_careful_pending_req_get SESSION -- print the code of the session's last
+# request while its record is unexpired; exit 1 otherwise (an expired or
+# malformed record is removed). A guard deny never touches the record; only
+# mk_careful_pending_clear (approval) and expiry remove it.
+mk_careful_pending_req_get() {
+  local f c="" e=""
+  f="$(mk_careful_pending_req_file "$1")"
+  _mk_cf_unsafe "$f" && return 1
+  [ -f "$f" ] || return 1
+  read -r c e < "$f" || true
+  case "$e" in ''|*[!0-9]*) rm -f "$f"; return 1 ;; esac
+  { [ "${#e}" -le 12 ] && [ -n "$c" ]; } || { rm -f "$f"; return 1; }
+  [ "$e" -gt "$(date +%s)" ] || { rm -f "$f"; return 1; }
+  printf '%s\n' "$c"
+}
+
+# mk_careful_pending_clear SESSION -- drop the session's pending line (and
+# the request record next to it).
+mk_careful_pending_clear() {
+  local f r
+  f="$(mk_careful_pending_file "$1")"
+  r="$(mk_careful_pending_req_file "$1")"
+  _mk_cf_unsafe "$f" || rm -f "$f"
+  _mk_cf_unsafe "$r" || rm -f "$r"
+  return 0
+}
+
+# mk_careful_pending_get SESSION [CODE] -- print the pending line while it is
+# unexpired (and, with CODE, matches it); exit 1 otherwise. The expiry keeps
+# its "!" flag in the output. An expired or malformed file is removed.
+mk_careful_pending_get() {
+  local f code exp rest e
+  f="$(mk_careful_pending_file "$1")"
+  _mk_cf_unsafe "$f" && return 1
+  [ -f "$f" ] || return 1
+  read -r code exp rest < "$f" || true
+  e="${exp%!}"
+  # a dropped line also drops the session's request record once that expired
+  case "$e" in ''|*[!0-9]*) rm -f "$f"; mk_careful_pending_req_get "$1" >/dev/null || true; return 1 ;; esac
+  { [ "${#e}" -le 12 ] && [ -n "$code" ]; } || { rm -f "$f"; mk_careful_pending_req_get "$1" >/dev/null || true; return 1; }
+  [ "$e" -gt "$(date +%s)" ] || { rm -f "$f"; mk_careful_pending_req_get "$1" >/dev/null || true; return 1; }
+  if [ -n "${2:-}" ] && [ "$code" != "$2" ]; then return 1; fi
+  printf '%s %s%s\n' "$code" "$exp" "${rest:+ $rest}"
+}
+
+# Change windows are per session (spec 0.8 Part A, security review S4): the
+# window file careful-window-<session> and the failed marker
+# careful-window-failed-<session>, the session id sanitised as the pending
+# file's.
+_mk_cf_sess() { printf '%s' "$1" | tr -c 'A-Za-z0-9_-' _; }
+mk_careful_window_file() { mk_tmp "careful-window-$(_mk_cf_sess "$1")"; }
+_mk_cf_window_failed_file() { mk_tmp "careful-window-failed-$(_mk_cf_sess "$1")"; }
+
+# mk_careful_window_open SESSION MINUTES TARGETS -- open the session's change
+# window: one line "<expiry> <targets...>". MINUTES is an integer 1-240,
+# TARGETS a non-empty newline list, SESSION non-empty; anything else exits 1
+# and writes nothing.
+mk_careful_window_open() {
+  local f words exp
+  [ -n "$1" ] || return 1
+  f="$(mk_careful_window_file "$1")"
+  _mk_cf_unsafe "$f" && return 1
+  case "$2" in ''|*[!0-9]*) return 1 ;; esac
+  [ "${#2}" -le 3 ] || return 1
+  [ "$((10#$2))" -ge 1 ] && [ "$((10#$2))" -le 240 ] || return 1
+  words="$(_mk_cf_words "$3")" || return 1
+  exp="$(( $(date +%s) + 10#$2 * 60 ))"
+  _mk_cf_write "$f" "$exp $words"
+}
+
+# mk_careful_window_get SESSION -- print "<expiry> <targets...>" while the
+# session's window is open; an expired or malformed file is removed and the
+# exit is 1.
+mk_careful_window_get() {
+  local f exp rest
+  [ -n "$1" ] || return 1
+  f="$(mk_careful_window_file "$1")"
+  _mk_cf_unsafe "$f" && return 1
+  [ -f "$f" ] || return 1
+  read -r exp rest < "$f" || true
+  case "$exp" in ''|*[!0-9]*) rm -f "$f"; return 1 ;; esac
+  { [ "${#exp}" -le 12 ] && [ -n "$rest" ]; } || { rm -f "$f"; return 1; }
+  [ "$exp" -gt "$(date +%s)" ] || { rm -f "$f"; return 1; }
+  printf '%s %s\n' "$exp" "$rest"
+}
+
+# mk_careful_window_covers SESSION TARGETS -- exit 0 only when the session's
+# open window holds every target of the newline list TARGETS as a whole word.
+# Pure bash (no here-document that could fail and read as "no target").
+mk_careful_window_covers() {
+  local line t rl n=0 nl='
+'
+  line="$(mk_careful_window_get "$1")" || return 1
+  line=" ${line#* } "
+  rl="$2$nl"
+  while [ -n "$rl" ]; do
+    t="${rl%%"$nl"*}"; rl="${rl#*"$nl"}"
+    [ -n "$t" ] || continue
+    n=$((n + 1))
+    case "$line" in *" $t "*) ;; *) return 1 ;; esac
+  done
+  [ "$n" -gt 0 ]
+}
+
+# mk_careful_window_close SESSION [REASON] -- remove the session's window;
+# with REASON also leave the failed marker (first line of REASON) for the
+# next deny to report.
+mk_careful_window_close() {
+  local f ff
+  f="$(mk_careful_window_file "$1")"
+  _mk_cf_unsafe "$f" || rm -f "$f"
+  if [ -n "${2:-}" ]; then
+    ff="$(_mk_cf_window_failed_file "$1")"
+    _mk_cf_write "$ff" "$(printf '%s\n' "$2" | head -n 1)"
+  fi
+  return 0
+}
+
+# mk_careful_window_failed SESSION -- print the session's failed reason once
+# and remove it; exit 1 when there is none.
+mk_careful_window_failed() {
+  local ff reason
+  ff="$(_mk_cf_window_failed_file "$1")"
+  _mk_cf_unsafe "$ff" && return 1
+  [ -f "$ff" ] || return 1
+  IFS= read -r reason < "$ff" || true
+  rm -f "$ff"
+  [ -n "$reason" ] || return 1
+  printf '%s\n' "$reason"
 }

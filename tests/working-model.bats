@@ -44,5 +44,12 @@ load helpers
   run grep -F 'Never Docker' "$MK_REPO/WORKING-MODEL.md"; [ "$status" -ne 0 ]
 }
 @test "final M5: overlays cannot loosen any section" {
-  grep -F '## §5' -A2 "$MK_REPO/WORKING-MODEL.md" | grep -qF 'They cannot loosen §1–§9.'
+  grep -F '## §5' -A2 "$MK_REPO/WORKING-MODEL.md" | grep -qF 'They cannot loosen §1–§10.'
+}
+@test "working-model: §10 Remote changes exists and forbids handing commands to the user" {
+  grep -q '^## §10 Remote changes' "$MK_REPO/WORKING-MODEL.md"
+  sec="$(sed -n '/^## §10/,$p' "$MK_REPO/WORKING-MODEL.md")"
+  for w in 'never hand the user a command' 'remote.log' 'a failed step stops the plan' 'Read-only on a server is free' '| date-time | code | targets | plan title (runbook name + hash) | result | verified by |'; do
+    printf '%s' "$sec" | grep -qiF -- "$w" || { echo "$w"; false; }
+  done
 }

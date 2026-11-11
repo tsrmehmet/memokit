@@ -3,12 +3,17 @@ load helpers
 
 # guard-destructive.sh lets a recursive rm through without an approval code
 # only inside the current session's scratchpad/ or of a whole stale sibling
-# temp entry, and only when the whole command is one simple rm invocation.
+# temp entry, and (for a subagent) only when the whole command is one simple
+# rm invocation. The main session's compound form (0.8 Part D) is tested in
+# careful-cleanup.bats; tests here that pin the single-rm contract set
+# TT_AGENT so they run as a subagent.
 
-# tp CMD -- Bash payload carrying the fixture session's id and transcript.
+# tp CMD -- Bash payload carrying the fixture session's id and transcript
+# (and agent_id when TT_AGENT is set).
 tp() {
-  jq -nc --arg c "$1" --arg cwd "$PROJ" --arg t "$TT_TDIR/$TT_SID.jsonl" --arg s "$TT_SID" \
-    '{tool_name:"Bash",tool_input:{command:$c},cwd:$cwd,session_id:$s,transcript_path:$t}'
+  jq -nc --arg c "$1" --arg cwd "$PROJ" --arg t "$TT_TDIR/$TT_SID.jsonl" --arg s "$TT_SID" --arg a "${TT_AGENT:-}" \
+    '{tool_name:"Bash",tool_input:{command:$c},cwd:$cwd,session_id:$s,transcript_path:$t}
+     + (if $a == "" then {} else {agent_id:$a} end)'
 }
 allowed() {
   run_hook guard-destructive.sh "$(tp "$1")"
@@ -99,7 +104,8 @@ setup() {
   done
 }
 
-@test "temp rm: compound commands never get the exemption (S3)" {
+@test "temp rm: a subagent's compound commands never get the exemption (S3)" {
+  TT_AGENT=a1b2c3
   # The symlink swap: every target passes a check of the current filesystem,
   # yet the last rm would follow the new link out of the scratchpad.
   denied "rm -rf $TT_SP/real && ln -s ~ $TT_SP/real && rm -rf $TT_SP/real/Documents"
@@ -272,7 +278,8 @@ C" ]
   allowed "rm -rf $TT_SP/rv10a"
 }
 
-@test "temp rm (0.5.2): quoted, prefixed or grouped rm never gets the exemption" {
+@test "temp rm (0.5.2): a subagent's quoted, prefixed or grouped rm never gets the exemption" {
+  TT_AGENT=a1b2c3
   # shellcheck disable=SC2016
   for c in \
     "\"rm\" -rf $TT_SP/rv10a" \
@@ -331,7 +338,8 @@ C" ]
 continued-ok" ] || { echo "$output"; false; }
 }
 
-@test "temp rm (0.6.1): a chained scratchpad rm is denied with the single-call hint; other denials get none" {
+@test "temp rm (0.6.1): a subagent's chained scratchpad rm is denied with the single-call hint; other denials get none" {
+  TT_AGENT=a1b2c3
   denied "rm -rf $TT_SP/rv10a && echo done"
   reason | grep -qF 'rm -rf <'
   denied "S=$TT_SP/rv10a; rm -rf \$S"

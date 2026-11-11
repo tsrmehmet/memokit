@@ -26,6 +26,31 @@ load_cfg() {
   done
 }
 
+load_remote() {
+  run "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; mk_resolve_root '{}'; mk_load_config; printf '%s|%s|%s|%s' \"\$MK_REMOTE_ENABLED\" \"\$MK_REMOTE_HOSTS\" \"\$MK_REMOTE_WINDOW_MIN\" \"\$MK_REMOTE_RUNBOOKS_DIR\""
+}
+
+@test "remote config: loads with defaults; absent → disabled" {
+  mk_project "$(cfg '"remote":{"deployBranches":["deploy"],"hosts":["31.210.53.162","*"]}')"
+  load_remote   # prints ENABLED|HOSTS|WINDOW|RUNBOOKS
+  [ "$output" = "1|31.210.53.162
+*|30|.claude/memokit/runbooks" ]
+  mk_project; load_remote; [ "${output%%|*}" = "0" ]
+}
+@test "remote config: bad shapes are rejected with field remote" {
+  for c in '"remote":[]' '"remote":{"x":1}' '"remote":{"hosts":[""]}' '"remote":{"deployBranches":["a b"]}' \
+           '"remote":{"windowMinutes":0}' '"remote":{"windowMinutes":241}' '"remote":{"readOnlyFirstWords":["a-b-c"]}' \
+           '"remote":{"runbooksDir":"../x"}'; do
+    mk_project "$(cfg "$c")"; load_cfg; [ "${output%%|*}" = "remote" ] || { echo "$c -> $output"; false; }
+  done
+}
+@test "careful pattern target: optional, validated like a label" {
+  mk_project "$(cfg '"careful":{"patterns":[{"match":"flyctl deploy","label":"fly","target":"fly-prod"}]}')"
+  load_cfg; [ "${output%%|*}" = "" ]
+  mk_project "$(cfg '"careful":{"patterns":[{"match":"x","label":"a","target":"Bad Target"}]}')"
+  load_cfg; [ "${output%%|*}" = "careful" ]
+}
+
 labels() {
   run "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; . '$HOOKS/lib/careful.sh'; mk_resolve_root '{}'; mk_load_config >/dev/null; mk_careful_labels \"\$1\"" _ "$1"
 }
@@ -686,7 +711,7 @@ grants() { lib 'mk_careful_grants_file'; }
 
 @test "approval at the start of the message records a grant" {
   mk_project
-  run_hook inject-rules.sh "$(prompt_payload 'ONAY ABC123 lütfen devam')"
+  run_hook inject-rules.sh "$(prompt_payload 'ONAY ABC123.')"
   ctx | grep -q 'abc123'
   grep -q '^abc123 ' "$(grants)"
   run_hook inject-rules.sh "$(prompt_payload "$(printf 'approve 0a1b2c\nand then continue')")"

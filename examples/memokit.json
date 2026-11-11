@@ -20,6 +20,14 @@
   "parallel": { "maxCoders": 3, "maxReviewers": 3 },
   "review": { "model": "auto" },
   "careful": {
-    "patterns": [ { "match": "kubectl[[:space:]]+(apply|patch|scale)", "label": "kubectl-mutate" } ]
+    "patterns": [ { "match": "kubectl[[:space:]]+(apply|patch|scale)", "label": "kubectl-mutate", "target": "kube" } ]
+  },
+  "remote": {
+    "deployBranches": ["deploy", "public-release"],
+    "hosts": ["31.210.53.162", "prod.example.com"],
+    "readOnlyFirstWords": ["pm2-list", "pm2-status"],
+    "windowMinutes": 30,
+    "runbooksDir": ".claude/memokit/runbooks",
+    "log": "docs/DEPLOYS.md"
   }
 }

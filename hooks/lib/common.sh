@@ -54,6 +54,40 @@ mk_resolve_root() {
 
 mk_active() { [ -n "$MK_ROOT" ] && [ -f "$MK_CONFIG" ]; }
 
+# Active marker: session-start.sh (main session) writes it when memokit is
+# active, so a config that vanishes mid-session (every hook gates on
+# mk_active) can be told from a project that never had memokit. The name
+# starts with careful- so it is careful-state (a command naming it is denied).
+mk_active_marker_file() {
+  local sid
+  sid="$(printf '%s' "$1" | jq -r '.session_id // "unknown"' 2>/dev/null)"
+  mk_tmp "careful-active-$(printf '%s' "${sid:-unknown}" | tr -c 'A-Za-z0-9_-' _)"
+}
+# mk_active_marker_write PAYLOAD -- safe writer: never through a symlink or
+# over a foreign file; atomic (mktemp + mv, umask 077).
+mk_active_marker_write() {
+  local f tmp
+  f="$(mk_active_marker_file "$1")"
+  case "$f" in /?*) ;; *) return 1 ;; esac
+  [ -L "$f" ] && return 1
+  if [ -e "$f" ]; then { [ -f "$f" ] && [ -O "$f" ]; } || return 1; fi
+  tmp="$( umask 077; mktemp "$f.XXXXXX" 2>/dev/null )" || return 1
+  [ -n "$tmp" ] || return 1
+  printf 'active\n' > "$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
+}
+# mk_config_vanished PAYLOAD -- true when memokit is not active now, this
+# session's marker says it was, and the payload is a subagent (agent_id) using
+# Bash or a file-editing tool.
+mk_config_vanished() {
+  local f
+  mk_active && return 1
+  f="$(mk_active_marker_file "$1")"
+  [ -f "$f" ] && [ ! -L "$f" ] && [ -O "$f" ] || return 1
+  printf '%s' "$1" | jq -e '(.agent_id // "") != "" and ((.tool_name // "") as $t
+    | ($t == "Bash" or $t == "Edit" or $t == "Write" or $t == "MultiEdit" or $t == "NotebookEdit"))' >/dev/null 2>&1
+}
+
 # mk_path_inside_root <repo-relative path>: true when the path's directory,
 # resolved physically (so "../" and symlinked directories count), is below
 # MK_ROOT and the file itself is not a symlink. Guards the scripts memokit.json
@@ -92,6 +126,8 @@ mk_load_config() {
 tests"; MK_CONTEXT_LIMIT=300000; MK_STATE_MAX_BEHIND=3
   MK_HEALTH_SCRIPT=""; MK_SESSION_DOCS=""; MK_HINTS_CUSTOM_JSON="[]"
   MK_GRAPH_ROOT=""; MK_GRAPH_MAX_BEHIND=20; MK_GRAPH_REFRESH_SCRIPT=""; MK_CAREFUL_PATTERNS_JSON="[]"
+  MK_REMOTE_ENABLED=0; MK_REMOTE_DEPLOY_BRANCHES=""; MK_REMOTE_HOSTS=""; MK_REMOTE_READONLY=""
+  MK_REMOTE_WINDOW_MIN=30; MK_REMOTE_RUNBOOKS_DIR=".claude/memokit/runbooks"; MK_REMOTE_LOG="docs/DEPLOYS.md"
   MK_SCRATCH_AGENT_MAX_MB=1024; MK_SCRATCH_STALE_HOURS=24; MK_SCRATCH_REPORT_MIN_MB=500
   MK_DISK_MIN_FREE_GB=30; MK_DISK_DROP_WARN_GB=10
   MK_PARALLEL_MAX_CODERS=3; MK_PARALLEL_MAX_REVIEWERS=3; MK_REVIEW_MODEL="auto"
@@ -140,6 +176,41 @@ mk_guard_off() { [ "${MEMOKIT_GUARD_OFF:-0}" = "1" ]; }
 
 mk_dirs_human() {
   printf '%s\n' "$MK_GUARDED_DIRS" | sed '/^$/d; s#$#/#' | paste -sd, - | sed 's/,/, /g'
+}
+
+# mk_strip_heredoc_bodies TEXT -- TEXT with the BODY lines of every heredoc
+# dropped (the opener line and the closing marker line kept), for
+# guard-edit.sh and guard-subagent-authority.sh: a body is data, not a
+# command. A line holding << opens a heredoc when the LAST <<MARKER on it
+# (<<-?, blanks, an optional backslash and quote, a name) names one; the
+# body ends at the line that is exactly the marker (leading tabs dropped
+# first when the line holds <<-). ONE awk pass (0.8.0 final wave: the old
+# loop forked grep | tail for every line holding <<, 16 000 such lines took
+# past the 5 s hook timeout). The last marker is found by splitting the
+# line on < (a marker holds no <), linear in the line.
+mk_strip_heredoc_bodies() {
+  printf '%s\n' "$1" | LC_ALL=C awk '
+    BEGIN { re = "^-?[[:space:]]*\\\\?[\"\047]?[A-Za-z_][A-Za-z0-9_]*[\"\047]?" }
+    {
+      if (inh) {
+        t = $0
+        if (tabs) sub(/^\t+/, "", t)
+        if (t == mk) { inh = 0; print }
+        next
+      }
+      print
+      if (index($0, "<<")) {
+        tabs = index($0, "<<-") ? 1 : 0
+        n = split($0, a, "<")
+        for (i = n - 1; i >= 2; i--) {
+          if (a[i] != "" || !match(a[i + 1], re)) continue
+          m = substr(a[i + 1], RSTART, RLENGTH)
+          sub(/^-/, "", m); gsub("[[:space:]\"\047\\\\]", "", m)
+          if (m != "") { mk = m; inh = 1 }
+          break
+        }
+      }
+    }'
 }
 
 mk_in_guarded_list() {

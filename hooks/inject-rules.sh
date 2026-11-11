@@ -11,9 +11,11 @@
 # documented rule can.
 #
 # SAFETY: the prompt is READ but never echoed back, with ONE exception: the
-# 6-hex approval code of a valid "onay|approve <code>" first line is echoed
-# (it matched [0-9a-f]{6} exactly). Only fixed strings from this file (plus
-# the sanitized graph-staleness gate text, see below) reach
+# 6-hex approval code of a valid approval first line (see the phrases below)
+# is echoed (it matched [0-9a-f]{6} exactly). The plan's targets and expiry
+# in the window message come from memokit's own pending/window files (words
+# validated by the careful lib), not from the prompt. Only fixed strings from
+# this file (plus the sanitized graph-staleness gate text, see below) reach
 # additionalContext, so nothing else in a prompt can break the JSON or smuggle
 # instructions through it.
 set -u
@@ -39,16 +41,84 @@ fi
 prompt="$(printf '%s' "$PAYLOAD" | jq -r '.prompt // empty' 2>/dev/null)" || prompt=""
 DIRS="$(mk_dirs_human)"
 
-# Destructive-command approval (guard-destructive.sh). Only a FIRST LINE that
-# starts with "onay <code>" / "approve <code>" counts, so a code quoted
-# inside a report or a notification never grants anything. The code is
-# [0-9a-f]{6}, so echoing it back cannot break the JSON.
+# Approval (guard-destructive.sh). Only the FIRST LINE counts, so a code
+# quoted inside a report or a notification never grants anything. Phrases
+# (case-insensitive, EXACT bytes under LC_ALL=C; the dotless i is built from
+# an octal escape, never a literal letter, and refusals such as the Turkish
+# "do not approve" forms do not match):
+#   with a code: onay | the Turkish -iyorum form | approve | approved, then
+#     the 6-hex code, then only blanks/punctuation (any other text = no grant);
+#   bare (whole line): the same words | "evet onayla" -> the session's single
+#     pending code (a flagged line, i.e. two plans were shown, is ambiguous).
+# A pending plan with targets opens a change window and the targets
+# (validated words from the hook's own pending file) and the expiry time are
+# echoed; the code is [0-9a-f]{6}. With remote configured a code that matches
+# no unexpired pending line is refused (nothing written); without it the code
+# becomes a single-use grant as before.
 GRANTED=""
-code="$(printf '%s' "$prompt" | sed -nE '1s/^[[:space:]]*([Oo][Nn][Aa][Yy]|[Aa][Pp][Pp][Rr][Oo][Vv][Ee])[[:space:]]+([0-9a-fA-F]{6})([^0-9a-zA-Z].*)?$/\2/p' | tr 'A-F' 'a-f')"
-if [ -n "$code" ]; then
+_ir_dotless="$(printf '\304\261')"
+_ir_word="([Oo][Nn][Aa][Yy]|[Oo][Nn][Aa][Yy][Ll](${_ir_dotless}|[iI])[Yy][Oo][Rr][Uu][Mm]|[Aa][Pp][Pp][Rr][Oo][Vv][Ee]|[Aa][Pp][Pp][Rr][Oo][Vv][Ee][Dd])"
+first="$(printf '%s' "$prompt" | LC_ALL=C sed -n '1p')"
+code="$(printf '%s' "$first" | LC_ALL=C sed -nE "s/^[[:space:]]*${_ir_word}[[:space:]]+([0-9a-fA-F]{6})[[:space:][:punct:]]*\$/\\3/p" | tr 'A-F' 'a-f')"
+bare=0
+if [ -z "$code" ] && printf '%s' "$first" | LC_ALL=C grep -qE "^[[:space:]]*(${_ir_word}|[Ee][Vv][Ee][Tt][[:space:]]+[Oo][Nn][Aa][Yy][Ll][Aa])[[:space:]]*\$"; then
+  bare=1
+fi
+if [ -n "$code" ] || [ "$bare" = 1 ]; then
   # shellcheck source-path=SCRIPTDIR source=lib/careful.sh
   . "$MK_LIB_DIR/careful.sh"
-  mk_careful_grant "$code" 2>/dev/null && GRANTED="$(mk_msg IR_CAREFUL_GRANTED "$code")"
+  # Session id exactly as guard-destructive.sh derives it.
+  SESSION="$(printf '%s' "$PAYLOAD" | jq -r '(.session_id // "unknown" | tostring | explode | map(if . < 33 or . == 127 then 95 else . end) | implode)' 2>/dev/null)" || SESSION=""
+  SESSION="$(printf '%s' "$SESSION" | tr -c 'A-Za-z0-9_-' _)"
+  [ -n "$SESSION" ] || SESSION=unknown
+  pline=""
+  if [ "$bare" = 1 ]; then
+    pline="$(mk_careful_pending_get "$SESSION")" || pline=""
+    if [ -z "$pline" ]; then
+      GRANTED="$(mk_msg IR_CAREFUL_NO_PENDING)"
+    else
+      read -r code pexp _ <<EOF
+$pline
+EOF
+      case "$pexp" in *!) GRANTED="$(mk_msg IR_CAREFUL_PENDING_AMBIGUOUS "$code")"; code="" ;; esac
+    fi
+  else
+    pline="$(mk_careful_pending_get "$SESSION" "$code")" || pline=""
+  fi
+  if [ -n "$code" ]; then
+    ptargets=""
+    if [ -n "$pline" ]; then
+      read -r _ _ ptargets <<EOF
+$pline
+EOF
+    fi
+    if [ -n "$ptargets" ]; then
+      # Window: the plan's targets (newline list); then consume the pending line.
+      if mk_careful_window_open "$SESSION" "$MK_REMOTE_WINDOW_MIN" "$(printf '%s' "$ptargets" | tr ' ' '\n')" 2>/dev/null; then
+        mk_careful_pending_clear "$SESSION"
+        wexp="$(mk_careful_window_get "$SESSION")" || wexp=""
+        wexp="${wexp%% *}"
+        if date -d @0 +%s >/dev/null 2>&1; then
+          until_="$(date -d "@${wexp:-0}" +%H:%M)"
+        else
+          until_="$(date -r "${wexp:-0}" +%H:%M)"
+        fi
+        GRANTED="$(mk_msg IR_CAREFUL_WINDOW "$ptargets" "$until_")"
+      else
+        GRANTED="$(mk_msg IR_CAREFUL_WINDOW_FAILED)"
+      fi
+    elif [ -n "$pline" ] || [ "${MK_REMOTE_ENABLED:-0}" != 1 ]; then
+      # No-target pending line, or remote not configured: single-use grant.
+      if mk_careful_grant "$code" 2>/dev/null; then
+        [ -z "$pline" ] || mk_careful_pending_clear "$SESSION"
+        GRANTED="$(mk_msg IR_CAREFUL_GRANTED "$code")"
+      fi
+    else
+      # Remote configured and nothing pending for this code (unknown or
+      # expired): refuse, write nothing.
+      GRANTED="$(mk_msg IR_CAREFUL_NO_PENDING)"
+    fi
+  fi
 fi
 TEXT="$(mk_msg IR_RULES_BASE "$DIRS")"
 
