@@ -219,9 +219,11 @@ EOF
 # (_mk_ig_plugin_scope) and everything in .git/ but config and hooks/.
 # Stamp: <cksum crc>:<size>:<mode>:<inode>:<ctime> of the file (a symlink's
 # target): ctime, which a user cannot set (a rename, chmod or in-place
-# rewrite with a forged CRC all show), in nanoseconds where stat gives them
-# (BSD; GNU: seconds). A directory, or a symlink to one (find lists the
-# link), has no content to checksum: DIR:<inode>:<ctime>, so an unchanged one
+# rewrite with a forged CRC all show), in nanoseconds (BSD %Fc, GNU %.9Z:
+# with seconds, a file removed and created again within the second on the
+# inode just freed, same size and mode, kept its stamp). A directory, or a
+# symlink to one (find lists the link), has no content to checksum:
+# DIR:<inode>:<ctime>, so an unchanged one
 # compares equal; a link to one adds :L<cksum of its link text> when it
 # resolves inside the plugin root, and is UNREADABLE when it resolves outside
 # (_mk_ig_dirlinks; files behind it would go undigested). ABSENT: stat cannot reach it (missing, or a symlink
@@ -265,7 +267,7 @@ mk_integrity_digest() {
                 echo @@LIST; [ -z "$fl" ] || printf '%s\n' "$fl"; printf '%s\n' "${files[@]}"; } |
               MK_IG_SETS_E="$MK_IG_SETS" MK_IG_MAX_E="$MK_IG_SMALL_MAX" LC_ALL=C awk "$_MK_IG_JOIN")" || rc=1 ;;
     *)
-      out="$( { cksum -- "${files[@]}" 2>/dev/null; echo @@ST; stat -L -c '%F:%a:%i:%Z|%n' -- "${files[@]}" 2>/dev/null
+      out="$( { cksum -- "${files[@]}" 2>/dev/null; echo @@ST; stat -L -c '%F:%a:%i:%.9Z|%n' -- "${files[@]}" 2>/dev/null
                 echo @@LIST; [ -z "$fl" ] || printf '%s\n' "$fl"; printf '%s\n' "${files[@]}"; } |
               MK_IG_SETS_E="$MK_IG_SETS" MK_IG_MAX_E="$MK_IG_SMALL_MAX" LC_ALL=C awk "$_MK_IG_JOIN")" || rc=1 ;;
   esac
@@ -456,12 +458,15 @@ mk_integrity_perm_ok() {
   return "$rc"
 }
 
-# _mk_ig_lock FILE -- takes FILE.lock (mkdir): 20 tries 50 ms apart; a lock
-# older than 30 s (its holder died) is removed once. Exit 1 when not taken.
+# _mk_ig_lock FILE -- takes FILE.lock (mkdir): 10 tries 100 ms apart (about
+# 1 s); a lock older than 30 s (its holder died) is removed once. Exit 1
+# when not taken. While the lock is there only the sleep forks (mkdir runs
+# when it is gone): a held lock cost 40 forks with 20 tries, and on a CI
+# runner with slow forks that wait used up the hook's 3.3 s budget.
 _mk_ig_lock() {
   local l="$1.lock" i=0 m n
-  while [ "$i" -lt 20 ]; do
-    mkdir "$l" 2>/dev/null && return 0
+  while [ "$i" -lt 10 ]; do
+    if [ ! -e "$l" ] && [ ! -L "$l" ]; then mkdir "$l" 2>/dev/null && return 0; fi
     if [ "$i" = 0 ] && [ -d "$l" ] && [ ! -L "$l" ]; then
       case "${OSTYPE:-}" in
         darwin*|*bsd*) m="$(stat -f %m "$l" 2>/dev/null)" ;;
@@ -471,7 +476,7 @@ _mk_ig_lock() {
       case "$m$n" in *[!0-9]*|'') ;; *) [ $((n - m)) -le 30 ] || rmdir "$l" 2>/dev/null ;; esac
     fi
     i=$((i + 1))
-    sleep 0.05
+    sleep 0.1
   done
   return 1
 }

@@ -1084,6 +1084,32 @@ b"; clear_alerts
   block_reason | grep -qF "$L_PL" || { echo "re-added: [$output]"; false; }
 }
 
+# CI fix (0.8.1): on Linux the stamp's ctime was in seconds, and ext4 gives a
+# re-created file the inode just freed: the same rule removed and added
+# again within that second, same size and mode, had the first change's
+# stamp, and the record bound to it backed the second change (CI: silent).
+# Forced here with a stat that reports every inode as 7 and every
+# second-resolution ctime as 100 (sub-second ctime and macOS's %Fc pass).
+@test "integrity (R2): a re-added rule with the same inode and ctime second is still another change" {
+  local f stub="$BATS_TEST_TMPDIR/statstub" real
+  real="$(command -v stat)"
+  mkdir -p "$stub"
+  printf '#!/bin/sh\nfor a; do shift; case "$a" in *%%i*|*%%Z*) a="$(printf "%%s" "$a" | sed "s/%%i/7/g; s/%%Z/100/g")" ;; esac; set -- "$@" "$a"; done\nexec %s "$@"\n' "$real" > "$stub/stat"
+  chmod +x "$stub/stat"
+  PATH="$stub:$PATH"
+  ig PreToolUse Bash agent-1 tu1
+  ig PreToolUse Bash agent-2 tu2
+  perm_req Bash "$(sugg Bash 'npm test')"
+  f="$(perm_file)"
+  local_allow '["Bash(npm test)"]'
+  ig PostToolUse Bash agent-1 tu1
+  [ -z "$output" ] || { echo "first: [$output]"; false; }
+  jq -e '.s | type == "string"' "$f" >/dev/null || { cat "$f"; false; }
+  rm -f "$PROJ/.claude/settings.local.json"
+  local_allow '["Bash(npm test)"]'
+  ig PostToolUse Bash agent-2 tu2
+  block_reason | grep -qF "$L_PL" || { echo "re-added: [$output] record: $(cat "$f")"; false; }
+}
 @test "integrity (R2): a held record lock is the full alert; a stale one (over 30 s) is taken over" {
   local f
   ig PreToolUse Bash agent-1 tu1
