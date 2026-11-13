@@ -493,7 +493,7 @@ case "$TOOL" in
       case "$FPATH" in \~|\~/*) FPATH="$HOME${FPATH#"~"}" ;; esac
     fi
     _mk_gs_pr="$(_mk_gs_lc "$(cd -P "$MK_ROOT" 2>/dev/null && pwd -P)")"
-    if printf '%s' "$FPATH" | grep -qiE '\.claude.*/\.\.(/|$)' 2>/dev/null; then
+    if printf '%s' "$FPATH" 2>/dev/null | grep -qiE '\.claude.*/\.\.(/|$)' 2>/dev/null; then
       deny "$(mk_msg GS_CONFIG_EDIT "$FPATH")"
     fi
     # Physical resolution of the UNFOLDED path (the kernel walks .. after a
@@ -663,7 +663,7 @@ extract_dash_c_inner() {
   # The text after the first "-c "; when it opens with a quote, up to the
   # next same quote. One awk (0.8.0 final wave: ${c#*-c } took 5.8 s on
   # 100 KB under a UTF-8 locale, past the hook timeout).
-  printf '%s\n' "$c" | LC_ALL=C awk '
+  printf '%s\n' "$c" 2>/dev/null | LC_ALL=C awk '
     { if (!f) {
         i = index($0, "-c "); if (!i) next
         f = 1; s = substr($0, i + 3); q = substr(s, 1, 1)
@@ -700,10 +700,10 @@ _mk_gs_rx_wr='>|(^|[^[:alnum:]_-])(tee|cp|mv|rm|ln|truncate|install)([^[:alnum:]
 # shellcheck disable=SC2016  # regex, not an expansion
 _mk_gs_rx_glob='(^|[[:space:]])[^[:space:]]*([*?[$`{][^[:space:]]*kit-w|kit-w[^[:space:]]*[*?[$`{])|(\$\(|`).*kit-w'
 _mk_gs_win_hit() {
-  printf '%s' "$1" | grep -qiE "$_mk_gs_rx" 2>/dev/null && return 0
-  printf '%s' "$1" | grep -qiE 'CLAUDE_PLUGIN_ROOT' 2>/dev/null && return 0
-  printf '%s' "$1" | grep -qiE "$_mk_gs_rx_dir" 2>/dev/null && return 0
-  printf '%s' "$1" | grep -qiE "$_mk_gs_rx_glob" 2>/dev/null && return 0
+  printf '%s' "$1" 2>/dev/null | grep -qiE "$_mk_gs_rx" 2>/dev/null && return 0
+  printf '%s' "$1" 2>/dev/null | grep -qiE 'CLAUDE_PLUGIN_ROOT' 2>/dev/null && return 0
+  printf '%s' "$1" 2>/dev/null | grep -qiE "$_mk_gs_rx_dir" 2>/dev/null && return 0
+  printf '%s' "$1" 2>/dev/null | grep -qiE "$_mk_gs_rx_glob" 2>/dev/null && return 0
   return 1
 }
 # A subagent may not run memokit's session-start.sh (0.8.1): it rewrites,
@@ -735,15 +735,15 @@ _mk_gs_ss_hit() {
     # session)-start.sh): a text holding $( or a backquote that also names
     # start.sh or session is a hit (two fixed-string greps, no grammar).
     # shellcheck disable=SC2016  # fixed strings, not expansions
-    if printf '%s' "$1" | grep -qF -e '$(' -e '`' && printf '%s' "$1" | grep -qiF -e 'start.sh' -e 'session'; then
+    if printf '%s' "$1" 2>/dev/null | grep -qF -e '$(' -e '`' && printf '%s' "$1" 2>/dev/null | grep -qiF -e 'start.sh' -e 'session'; then
       rc=0
     else
       # Linear: whole-component substitutions only (W = a .* wildcard, Q =
       # one character; the component is lower-cased first, so neither occurs
       # in it), at most 16 fixed characters reach the regex.
       # shellcheck disable=SC2016  # awk program, not an expansion
-      printf '%s\n' "$1" | LC_ALL=C tr -d "\"'\\\\" | LC_ALL=C tr ';|&<>()=[:space:]' '\n' |
-        LC_ALL=C grep -E '[*?[$`{]' | LC_ALL=C awk '
+      { printf '%s\n' "$1" | LC_ALL=C tr -d "\"'\\\\" | LC_ALL=C tr ';|&<>()=[:space:]' '\n' |
+        LC_ALL=C grep -E '[*?[$`{]'; } 2>/dev/null | LC_ALL=C awk '
       { l = $0; sub(/^.*\//, "", l); l = tolower(l)
         gsub(/\$\{[^}]*\}?/, "W", l); gsub(/\$[a-z0-9_]*/, "W", l); gsub(/`[^`]*`?/, "W", l)
         gsub(/\{[^}]*\}?/, "W", l); gsub(/\[[^]]*\]?/, "Q", l); gsub(/\*/, "W", l); gsub(/\?/, "Q", l)
@@ -793,11 +793,14 @@ EOF
 # one (no $, backtick or glob character; a glued short option -Xpath also as
 # path) names one of the TARGETs by device:inode, as _mk_gs_ef does per
 # word. 0.8.0 final wave: one awk builds every path (each relative word
-# against every base in _mk_gs_bases) and ONE xargs stat reads them all; the
-# per-word loop took 4 s for 9 000 words and 9 cd targets. When the targets'
-# ids cannot all be read (no stat), the per-word builtin loop runs instead.
+# against every base in _mk_gs_bases); the per-word loop took 4 s for 9 000
+# words and 9 cd targets. 0.8.1 CI fix: the paths are then tested by one
+# builtin loop ([[ -e ]], then -ef: device:inode, links followed as stat -L
+# follows them), not one xargs stat (7 800 missing paths: ~110 ms against
+# ~45 ms). When the targets' ids cannot all be read (no stat), the per-word
+# builtin loop runs instead.
 _mk_gs_ef_any() {
-  local fmt ids w n=0 paths
+  local fmt ids w n=0 paths p t
   if stat -L -c %d:%i / >/dev/null 2>&1; then fmt="-c"; else fmt="-f"; fi
   ids="$(stat -L "$fmt" %d:%i "$@" 2>/dev/null)" || ids=""
   while IFS= read -r w; do case "$w" in *:*) n=$((n + 1)) ;; esac; done <<EOF
@@ -824,8 +827,34 @@ EOF
     { emit($0); if ($0 ~ /^-[^-]./) emit(substr($0, 3)) }')"
   case $? in 0) ;; 3) return 2 ;; *) return 0 ;; esac
   [ -n "$paths" ] || return 1
-  printf '%s\n' "$paths" | LC_ALL=C tr '\n' '\000' | xargs -0 stat -L "$fmt" %d:%i 2>/dev/null |
-    grep -qxF -e "$ids"
+  # (the hook runs under set -f: no glob)
+  local IFS="$_MK_GS_NL"
+  for p in $paths; do
+    [[ -e $p ]] || continue
+    for t in "$@"; do [[ $p -ef $t ]] && return 0; done
+  done
+  return 1
+}
+# _mk_gs_ef_memo SLOT WORDS TARGET... -- _mk_gs_ef_any on WORDS (the exact
+# bytes it would read; status 0, 1 or 2), memoised per SLOT (cfg or set) on
+# WORDS, the bases and the TARGETs: the flat view of a quoted command often
+# yields the same words, and stat-ing every joined path was the costliest
+# part of running the config and settings gates twice (0.8.1 CI fix).
+_MK_GS_EFK_cfg=""; _MK_GS_EFR_cfg=""; _MK_GS_EFK_set=""; _MK_GS_EFR_set=""
+_mk_gs_ef_memo() {
+  local s="$1" w="$2" k rc
+  shift 2
+  k="$w$_MK_GS_NL$_mk_gs_bases$_MK_GS_NL$*"
+  case "$s" in
+    cfg) if [ -n "$_MK_GS_EFR_cfg" ] && [ "$k" = "$_MK_GS_EFK_cfg" ]; then return "$_MK_GS_EFR_cfg"; fi ;;
+    *) if [ -n "$_MK_GS_EFR_set" ] && [ "$k" = "$_MK_GS_EFK_set" ]; then return "$_MK_GS_EFR_set"; fi ;;
+  esac
+  printf '%s' "$w" 2>/dev/null | _mk_gs_ef_any "$@"; rc=$?
+  case "$s" in
+    cfg) _MK_GS_EFK_cfg="$k"; _MK_GS_EFR_cfg="$rc" ;;
+    *) _MK_GS_EFK_set="$k"; _MK_GS_EFR_set="$rc" ;;
+  esac
+  return "$rc"
 }
 # Bounds of the config gate (0.8.0 final wave, C1: every per-word loop below
 # forked per word, and a cheap command of a few thousand such words kept the
@@ -1029,7 +1058,7 @@ EOF
 # a newline or at ; | & ( ) { }.
 _mk_gs_ro() {
   # shellcheck disable=SC2016  # awk program, not an expansion
-  printf '%s\n' "$1" | LC_ALL=C awk '
+  printf '%s\n' "$1" 2>/dev/null | LC_ALL=C awk '
     BEGIN { split("cat less head tail jq grep diff wc ls stat file", r, " ")
       for (i in r) ok[r[i]] = 1 }
     function seg() { st = 0 }
@@ -1059,7 +1088,8 @@ _mk_gs_set_map() {
     function pre(w, p, v) {
       if (v != "" && tolower(substr(w, 1, length(p))) == p) { o = v substr(w, length(p)); return 1 }
       return 0 }
-    function m(w) {
+    function m(w,   f) {
+      f = substr(w, 1, 1); if (f != "~" && f != "$") return w
       if (h != "" && (w == "~" || substr(w, 1, 2) == "~/")) return h substr(w, 2)
       if (pre(w, "$home/", h) || pre(w, "${home}/", h) || pre(w, "$claude_project_dir/", r) \
         || pre(w, "${claude_project_dir}/", r) || pre(w, "$claude_config_dir/", c) \
@@ -1108,7 +1138,7 @@ _mk_gs_dir_phys() {
 # regex over the text. mkdir, mv and cd do not count.
 _mk_gs_makes_link() {
   # shellcheck disable=SC2016  # regex, not an expansion
-  printf '%s\n' "$1" | LC_ALL=C tr -d "\"'\\\\" | LC_ALL=C grep -qiE \
+  { printf '%s\n' "$1" | LC_ALL=C tr -d "\"'\\\\"; } 2>/dev/null | LC_ALL=C grep -qiE \
     '(^|[^[:alnum:]_.-])g?ln([^[:alnum:]_.-]|$)|symlink|(^|[^[:alnum:]_.-])g?cp[[:space:]]+([^;&|]*[[:space:]])?(-[[:alnum:]]*s[[:alnum:]]*|--symbolic-link)([[:space:]]|$)'
 }
 # _mk_gs_set_hit VIEW -- 0: VIEW writes a settings file (it names one and
@@ -1145,16 +1175,16 @@ _mk_gs_set_hit() {
   lw="$(printf '%s\n' "$words" | LC_ALL=C grep -iF settings | LC_ALL=C tr ',' '\n' | LC_ALL=C grep -iF settings)"
   if [ -n "$lw" ]; then
     # ~user/... folded first (empty and . components dropped, .. pops).
-    if printf '%s\n' "$lw" | LC_ALL=C awk '
+    if printf '%s\n' "$lw" 2>/dev/null | LC_ALL=C awk '
       substr($0, 1, 1) == "~" { n = split($0, c, "/"); k = 1; st[1] = c[1]
         for (i = 2; i <= n; i++) {
           if (c[i] == "" || c[i] == ".") continue
           if (c[i] == "..") { if (k > 1) k--; continue }
           st[++k] = c[i] }
-        o = st[1]; for (i = 2; i <= k; i++) o = o "/" st[i]; print o }' |
+        o = st[1]; for (i = 2; i <= k; i++) o = o "/" st[i]; print o }' 2>/dev/null |
       LC_ALL=C grep -qiE '^~[^/]*/\.claude/settings(\.local)?\.json$'; then hit=1; fi
-    if [ "$hit" = 0 ] && printf '%s\n' "$lw" | _mk_gs_set_map | LC_ALL=C tr '[:upper:]' '[:lower:]' |
-      _mk_gs_fold "$(_mk_gs_lc "$_mk_gs_bases")" | LC_ALL=C grep -qxF -e "$_MK_GS_SET_LC"; then hit=1; fi
+    if [ "$hit" = 0 ] && { printf '%s\n' "$lw" | _mk_gs_set_map | LC_ALL=C tr '[:upper:]' '[:lower:]' |
+      _mk_gs_fold "$(_mk_gs_lc "$_mk_gs_bases")"; } 2>/dev/null | LC_ALL=C grep -qxF -e "$_MK_GS_SET_LC"; then hit=1; fi
   fi
   # Expansion and glob words: coarse words (quotes dropped; split on
   # separators, redirections, whitespace and =) holding $, a backtick, ),
@@ -1173,8 +1203,8 @@ _mk_gs_set_hit() {
     # strong one (the scratchpad, /private/tmp/claude-501/..., names claude:
     # cp dist/*.json there is ordinary).
     # shellcheck disable=SC2016  # regex, not an expansion
-    if printf '%s' "$view" | LC_ALL=C grep -qiE '\.claude|~|\$\{?(home|claude_config_dir)\}?([^[:alnum:]_]|$)'; then st=1; ss=1
-    elif [ -n "$_MK_GS_CCD_LC" ] && printf '%s\n' "$view" | MK_GS_CCD="$_MK_GS_CCD_LC" LC_ALL=C awk '
+    if printf '%s' "$view" 2>/dev/null | LC_ALL=C grep -qiE '\.claude|~|\$\{?(home|claude_config_dir)\}?([^[:alnum:]_]|$)'; then st=1; ss=1
+    elif [ -n "$_MK_GS_CCD_LC" ] && printf '%s\n' "$view" 2>/dev/null | MK_GS_CCD="$_MK_GS_CCD_LC" LC_ALL=C awk '
       BEGIN { n = split(ENVIRON["MK_GS_CCD"], d, "\n") }
       { l = tolower($0); while (gsub(/\/\.\//, "/", l)) ; gsub(/\/\/+/, "/", l)
         for (i = 1; i <= n; i++) if (d[i] != "" && index(l, d[i])) { f = 1; exit } }
@@ -1199,9 +1229,9 @@ EOF
       esac
       # A bare "claude" (weak): only a word that spells setting and json,
       # or a glob that matches a settings name but not memokit.json.
-      if [ "$st" = 0 ] && printf '%s' "$view" | LC_ALL=C grep -qiF claude; then st=1; fi
+      if [ "$st" = 0 ] && printf '%s' "$view" 2>/dev/null | LC_ALL=C grep -qiF claude; then st=1; fi
     fi
-    printf '%s\n' "$cw" | LC_ALL=C awk -v st="$st" -v ss="$ss" -v lt="$lt" '
+    printf '%s\n' "$cw" 2>/dev/null | LC_ALL=C awk -v st="$st" -v ss="$ss" -v lt="$lt" '
       # g2re: the glob as an anchored regex, or "" when it cannot be built.
       function g2re(x,   i, ch, out, j) {
         out = ""
@@ -1270,10 +1300,10 @@ EOF
           if (d ~ /[$`*?[(){}]/) next
           print d }' | LC_ALL=C sort -u)"
       if [ -n "$raw" ]; then
-        dirs="$(printf '%s\n' "$raw" | _mk_gs_fold "$_mk_gs_bases" | LC_ALL=C sort -u |
+        dirs="$({ printf '%s\n' "$raw" | _mk_gs_fold "$_mk_gs_bases" | LC_ALL=C sort -u; } 2>/dev/null |
           LC_ALL=C awk -v m="$MK_GS_MAX_PATHS" 'NR > m { exit 3 } { print }')"
         [ $? = 3 ] && return 2
-        jd="$(printf '%s\n' "$raw" | MK_GS_BASES="$_mk_gs_bases" LC_ALL=C awk -v m="$MK_GS_MAX_PATHS" '
+        jd="$(printf '%s\n' "$raw" 2>/dev/null | MK_GS_BASES="$_mk_gs_bases" LC_ALL=C awk -v m="$MK_GS_MAX_PATHS" '
           BEGIN { nb = split(ENVIRON["MK_GS_BASES"], b, "\n") }
           function out(x) { if (seen[x]++) return; if (++n > m) exit 3; print x }
           function fold(p,   q, c, i, k, st, o) {
@@ -1297,10 +1327,10 @@ EOF
         dirs="$(printf '%s\n%s\n' "$dirs" "$f" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
         # =n (a .. after a directory not on disk) is a reference: it denies,
         # with the config gate's message when that gate also hits.
-        if printf '%s\n' "$f" | LC_ALL=C grep -qxF '=u'; then hit=1
-        elif [ -n "$_MK_GS_SDIR_U" ] && printf '%s\n' "$dirs" | LC_ALL=C grep -qxF -e "$_MK_GS_SDIR_U"; then hit=1
-        elif printf '%s\n' "$f" | LC_ALL=C grep -qxF '=x' && _mk_gs_makes_link "$view"; then hit=1
-        elif printf '%s\n' "$dirs" | LC_ALL=C grep -qxF -e "$_MK_GS_SDIR_P" -e '=p' -e '=n'; then bnd=1; fi
+        if printf '%s\n' "$f" 2>/dev/null | LC_ALL=C grep -qxF '=u'; then hit=1
+        elif [ -n "$_MK_GS_SDIR_U" ] && printf '%s\n' "$dirs" 2>/dev/null | LC_ALL=C grep -qxF -e "$_MK_GS_SDIR_U"; then hit=1
+        elif printf '%s\n' "$f" 2>/dev/null | LC_ALL=C grep -qxF '=x' && _mk_gs_makes_link "$view"; then hit=1
+        elif printf '%s\n' "$dirs" 2>/dev/null | LC_ALL=C grep -qxF -e "$_MK_GS_SDIR_P" -e '=p' -e '=n'; then bnd=1; fi
       fi
     fi
   fi
@@ -1316,9 +1346,10 @@ EOF
       # nope/../link/settings.json: nope is not on disk while the hook
       # checks, so only the folded spelling reaches the file).
       ew="$({ printf '%s\n' "$words"; printf '%s\n' "$words" | LC_ALL=C tr ',' '\n'; } | LC_ALL=C sort -u | _mk_gs_set_map)"
-      { printf '%s\n' "$ew"
+      ew="$({ printf '%s\n' "$ew"
         printf '%s\n' "$ew" | LC_ALL=C grep -E '(^|/)\.\.(/|$)' | LC_ALL=C grep -v '[$`*?[]' | _mk_gs_fold "$_mk_gs_bases"
-      } | _mk_gs_ef_any "$@"
+      } 2>/dev/null; printf x)"
+      _mk_gs_ef_memo set "${ew%x}" "$@"
       rc=$?
       [ "$rc" = 2 ] && return 2
       [ "$rc" = 0 ] && hit=1
@@ -1365,6 +1396,12 @@ _mk_gs_cfg_hit() {
   # the loop.
   while IFS= read -r seg; do
     [ -n "$seg" ] || continue
+    # Only a segment holding rm, mv or rsync as a whole word (blank-split,
+    # as set -- splits it) can be one: one case instead of the split.
+    case " $seg " in
+      *[" 	"]rm[" 	"]*|*[" 	"]mv[" 	"]*|*[" 	"]rsync[" 	"]*) ;;
+      *) continue ;;
+    esac
     # shellcheck disable=SC2086  # intentional word splitting
     set -- $seg
     while [ $# -gt 0 ]; do
@@ -1508,8 +1545,10 @@ EOF
     # cd/pushd targets (_mk_gs_cd_bases).
     _mk_gs_cd_bases "$view" || ref=1
     if [ "$ref" = 0 ]; then
-      { printf '%s' "$view" | LC_ALL=C tr -d "\"'" | LC_ALL=C tr "\`;|&(){}<>=[:space:]" '\n' | LC_ALL=C sort -u
-        printf '%s' "$altlist"; } | _mk_gs_ef_any "$MK_ROOT/.claude/memokit.json" "$MK_ROOT/.claude"
+      # (x: a sentinel, so the words keep their exact trailing bytes)
+      w="$({ printf '%s' "$view" | LC_ALL=C tr -d "\"'" | LC_ALL=C tr "\`;|&(){}<>=[:space:]" '\n' | LC_ALL=C sort -u
+        printf '%s' "$altlist"; } 2>/dev/null; printf x)"
+      _mk_gs_ef_memo cfg "${w%x}" "$MK_ROOT/.claude/memokit.json" "$MK_ROOT/.claude"
       case $? in 0) ref=1 ;; 2) return 2 ;; esac
     fi
   fi
@@ -1517,7 +1556,7 @@ EOF
     # A word that names .claude or the config next to an expansion (d=.claude;
     # cd $d) is a reference too.
     # shellcheck disable=SC2016  # regex, not an expansion
-    [ "$cand" = 1 ] && printf '%s' "$view" | LC_ALL=C grep -qE '[$`]' 2>/dev/null && return 0
+    [ "$cand" = 1 ] && printf '%s' "$view" 2>/dev/null | LC_ALL=C grep -qE '[$`]' 2>/dev/null && return 0
     return 1
   fi
   # Allowlist: only plain read commands, no redirection, no expansion.
@@ -1535,16 +1574,30 @@ EOF
 #   holding $, a backtick, a glob, a paren or a brace is never exempt: its
 #   target is unknown; nor is one spelling CLAUDE_PLUGIN_ROOT); prints every
 #   joined LITERAL path, unfolded, plus its folded form when it holds ..;
-#   exits 3 past m of them.
-# - mode "dirs": prints the directory part of each line.
+#   exits 3 past m of them. Then "=d" and the directory part of each
+#   printed path, once per directory.
 # - mode "phys": a line PATH<TAB>PHYS (_mk_gs_plug_phys) records PHYS for
 #   PATH and is tested; any other line is a path, tested as the PHYS of its
-#   directory part joined to its last component. Exits 4 on a hit, 3 on a
+#   directory part joined to its last component (a directory whose PHYS
+#   neither lies at or below a root nor holds one is decided once for all
+#   its plain names); "=d" lines are skipped. Exits 4 on a hit, 3 on a
 #   =big line (too many links to follow) and 4 on a =hit line.
 # shellcheck disable=SC2016  # awk program, not an expansion
 _MK_GS_PLUG_AWK='
   BEGIN { nb = split(ENVIRON["MK_GS_BASES"], b, "\n"); nn = split(ENVIRON["MK_GS_ROOTN"], rn, "\n")
-    nx = split(ENVIRON["MK_GS_ROOTX"], rx, "\n"); np = split(ENVIRON["MK_GS_PROJ"], px, "\n") }
+    nx = split(ENVIRON["MK_GS_ROOTX"], rx, "\n"); np = split(ENVIRON["MK_GS_PROJ"], px, "\n")
+    # pre: one regex for "at or below any root" (a dot bracketed); none
+    # when a root holds another regex character (then every root is tried).
+    for (i = 1; i <= nn + nx; i++) {
+      r = (i <= nn ? rn[i] : rx[i - nn]); if (r == "") continue
+      if (r ~ /[]\\^$[|()*+?{}]/) { pre = ""; bad = 1; break }
+      gsub(/\./, "[.]", r); pre = pre (pre == "" ? "" : "|") r }
+    if (bad || pre == "") pre = ""; else pre = "^(" pre ")(/|$)"
+    # anc: every spelling a root lies strictly below (its prefixes ending
+    # before a slash), for clear().
+    for (i = 1; i <= nn + nx; i++) {
+      r = (i <= nn ? rn[i] : rx[i - nn])
+      for (j = 2; j <= length(r); j++) if (substr(r, j, 1) == "/") anc[substr(r, 1, j - 1)] = 1 } }
   function fold(p,   q, c, i, k, st, o) {
     if (substr(p, 1, 1) == "/" && p !~ /\/\/|\/\.\.?(\/|$)|.\/$/) return p
     q = split(p, c, "/"); k = 0
@@ -1557,6 +1610,7 @@ _MK_GS_PLUG_AWK='
   function at(x, y) { return (x == y || index(x, y "/") == 1) }
   function under(p, strict,   i, j, f, l, ok) {
     f = fold(p); l = tolower(f)
+    if (pre != "" && l !~ pre) return 0
     for (i = 1; i <= nn; i++) if (rn[i] != "" && at(l, rn[i])) return 1
     for (i = 1; i <= nx; i++) {
       if (rx[i] == "" || !at(l, rx[i])) continue
@@ -1565,31 +1619,52 @@ _MK_GS_PLUG_AWK='
       for (j = 1; j <= np; j++) if (px[j] != "" && at(f, px[j])) { ok = 1; break }
       if (!ok) return 1 }
     return 0 }
-  function dir(p) { sub(/\/+$/, "", p); sub(/\/[^\/]*$/, "", p); return (p == "" ? "/" : p) }
-  function out(x) { if (seen[x]++) return; if (++n > m) exit 3; print x }
+  # dir(p): p without trailing slashes and without its last slash and what
+  # follows (p itself when it holds no other slash); "/" for "".
+  function dir(p,   i) {
+    i = length(p); while (i > 0 && substr(p, i, 1) == "/") i--
+    p = substr(p, 1, i); while (i > 0 && substr(p, i, 1) != "/") i--
+    if (i > 0) p = substr(p, 1, i - 1)
+    return (p == "" ? "/" : p) }
+  # clear(P): no root is at or above P, nor below it (P is not /).
+  function clear(p,   l, i, r) {
+    l = tolower(fold(p)); if (l == "/") return 0
+    if (pre != "") return (l !~ pre && !(l in anc))
+    for (i = 1; i <= nn + nx; i++) {
+      r = (i <= nn ? rn[i] : rx[i - nn])
+      if (r != "" && (at(l, r) || index(r, l "/") == 1)) return 0 }
+    return 1 }
+  function out(x,   d) {
+    if (seen[x]++) return; if (++n > m) exit 3; print x
+    d = dir(x); if (!(d in dd)) { dd[d]; dl[++nd] = d } }
   function one(p,   s) {
     s = (p ~ /[$`*?[(){}]/)
-    if (index(tolower(p), "claude_plugin_root") || under(p, s)) exit 4
+    if ((index(p, "_") && index(tolower(p), "claude_plugin_root")) || under(p, s)) exit 4
     if (s) return
     out(p); if (p ~ /(^|\/)\.\.(\/|$)/) out(fold(p)) }
   $0 == "" { next }
-  mode == "dirs" { d = dir($0); if (!seen[d]++) print d; next }
   mode == "phys" {
     if ($0 == "=big") exit 3
     if ($0 == "=hit") exit 4
+    if (substr($0, 1, 2) == "=d") next
     t = index($0, "\t")
     if (t) { ph[substr($0, 1, t - 1)] = substr($0, t + 1); if (under(substr($0, t + 1), 0)) exit 4; next }
     q = $0; sub(/\/+$/, "", q); d = dir(q)
-    if (d in ph && ph[d] != d && under(ph[d] "/" substr(q, length(d) + 1), 0)) exit 4
+    if (!(d in ph) || ph[d] == d) next
+    x = substr(q, length(d) + (d == "/" ? 1 : 2))
+    if (x != "" && x != "." && x != "..") { if (!(d in cl)) cl[d] = clear(ph[d]); if (cl[d]) next }
+    if (under((ph[d] == "/" ? "" : ph[d]) substr(q, length(d) + (d == "/" ? 0 : 1)), 0)) exit 4
     next }
   substr($0, 1, 1) == "/" { one($0); next }
-  { for (j = 1; j <= nb; j++) if (b[j] != "") one(b[j] "/" $0) }'
+  { for (j = 1; j <= nb; j++) if (b[j] != "") one(b[j] "/" $0) }
+  END { if (mode == "lex") for (i = 1; i <= nd; i++) print "=d" dl[i] }'
 # MK_GS_MAX_LINKS -- readlink calls the Bash plugin gate may make for one
 # command (file symlinks named in it); past it the command is too large.
 MK_GS_MAX_LINKS=64
-# _mk_gs_plug_phys DIRS PATHS -- both absolute, one per line. Changes
-# directory and turns globbing off: run it only in a subshell. Prints
-# PATH<TAB>PHYS for each of DIRS, and for each of PATHS that is a symlink
+# _mk_gs_plug_phys LINES -- the lex output: absolute PATHS, then "=d" DIRS,
+# one per line. Changes directory and turns globbing off: run it only in a
+# subshell. Prints PATH<TAB>PHYS for each of DIRS, and for each of PATHS
+# that is a symlink
 # (builtin test; a plain directory is its parent joined to its name), whose
 # link chain is followed first (readlink, at most 10 hops, a relative target
 # against the link's own directory; more hops or an unreadable link: =hit;
@@ -1598,26 +1673,42 @@ MK_GS_MAX_LINKS=64
 # directory, a .. after a link) joined to the rest of the path. No fork and
 # no read per line but the readlink of a symlink.
 _mk_gs_plug_phys() {
-  local o p r l h k=0 n=0 IFS="$_MK_GS_NL" LC_ALL=C
+  local o p r l h b n=0 lp="" lq="" IFS="$_MK_GS_NL" LC_ALL=C
   set -f
-  for o in $1 :paths: $2; do
-    case "$o" in :paths:) k=1; continue ;; /*) ;; *) continue ;; esac
-    p="$o"
-    if [ "$k" = 1 ]; then
-      [ -L "$o" ] || continue
-      h=0
-      while [ -L "$p" ]; do
-        h=$((h + 1)); n=$((n + 1))
-        [ "$n" -le "$MK_GS_MAX_LINKS" ] || { printf '=big\n'; return 0; }
-        { [ "$h" -le 10 ] && l="$(readlink "$p" 2>/dev/null)" && [ -n "$l" ]; } || { printf '=hit\n'; return 0; }
-        case "$l" in /*) p="$l" ;; *) p="${p%/*}/$l" ;; esac
-      done
-    fi
+  # One [[ ]] per plain path: the loop runs over every joined path (10 000
+  # and more in a 64 KiB command). A directory that is not a link, next to
+  # the last one resolved (same parent spelling, lp), is its parent's PHYS
+  # (lq) joined to its name: one test instead of a cd -P per directory.
+  for o in $1; do
+    [[ $o == /* && ! -L $o ]] && continue
+    case "$o" in
+      =d/*)
+        o="${o#=d}"; p="$o"; b="${o##*/}"
+        case "$b" in ''|.|..) ;; *)
+          if [ -n "$lp" ] && [ "${o%/*}" = "$lp" ] && [[ -d $o && ! -L $o ]]; then
+            printf '%s\t%s/%s\n' "$o" "$lq" "$b"; continue
+          fi ;;
+        esac ;;
+      /*)
+        p="$o"; h=0
+        while [ -L "$p" ]; do
+          h=$((h + 1)); n=$((n + 1))
+          [ "$n" -le "$MK_GS_MAX_LINKS" ] || { printf '=big\n'; return 0; }
+          { [ "$h" -le 10 ] && l="$(readlink "$p" 2>/dev/null)" && [ -n "$l" ]; } || { printf '=hit\n'; return 0; }
+          case "$l" in /*) p="$l" ;; *) p="${p%/*}/$l" ;; esac
+        done ;;
+      *) continue ;;
+    esac
     r=""
     until cd -P -- "$p" 2>/dev/null; do
       r="/${p##*/}$r"; p="${p%/*}"; p="${p:-/}"
     done
     printf '%s\t%s%s\n' "$o" "${PWD%/}" "$r"
+    # A directory resolved whole, not a link, with a plain name: its parent
+    # spelling resolves to the parent of its PHYS.
+    if [ "$p" = "$o" ] && [ -z "$r" ]; then
+      case "${o##*/}" in ''|.|..) ;; *) [[ -L $o ]] || { lp="${o%/*}"; lq="${PWD%/*}"; } ;; esac
+    fi
   done
 }
 # _mk_gs_plug_hit VIEW -- 0: VIEW does not only read (_mk_gs_ro) and names a
@@ -1656,14 +1747,13 @@ _mk_gs_plug_hit() {
 }
 # _mk_gs_plug_words WORDS -- _mk_gs_plug_hit's test of its words (0, 1, 2).
 _mk_gs_plug_words() {
-  local js ds
-  js="$({ printf '%s\n' "$1"; printf '%s\n' "$1" | LC_ALL=C grep -F ',' | LC_ALL=C tr ',' '\n'; } |
-    _mk_gs_set_map | MK_GS_BASES="$_mk_gs_bases" MK_GS_ROOTN="$_MK_GS_PLUG_LCN" MK_GS_ROOTX="$_MK_GS_PLUG_LCX" \
+  local js
+  js="$({ printf '%s\n' "$1"; printf '%s\n' "$1" | LC_ALL=C grep -F ',' | LC_ALL=C tr ',' '\n'; } 2>/dev/null |
+    _mk_gs_set_map 2>/dev/null | MK_GS_BASES="$_mk_gs_bases" MK_GS_ROOTN="$_MK_GS_PLUG_LCN" MK_GS_ROOTX="$_MK_GS_PLUG_LCX" \
     MK_GS_PROJ="$_MK_GS_PLUG_PX" LC_ALL=C awk -v mode=lex -v m="$MK_GS_MAX_PATHS" "$_MK_GS_PLUG_AWK")"
   case $? in 0) ;; 3) return 2 ;; *) return 0 ;; esac
   [ -n "$js" ] || return 1
-  ds="$(printf '%s\n' "$js" | LC_ALL=C awk -v mode=dirs "$_MK_GS_PLUG_AWK")"
-  { _mk_gs_plug_phys "$ds" "$js"; printf '%s\n' "$js"; } |
+  { _mk_gs_plug_phys "$js"; printf '%s\n' "$js"; } 2>/dev/null |
     MK_GS_ROOTN="$_MK_GS_PLUG_LCN" MK_GS_ROOTX="$_MK_GS_PLUG_LCX" MK_GS_PROJ="$_MK_GS_PLUG_PX" LC_ALL=C \
     awk -v mode=phys "$_MK_GS_PLUG_AWK"
   case $? in 0) return 1 ;; 3) return 2 ;; *) return 0 ;; esac

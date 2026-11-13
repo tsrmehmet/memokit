@@ -112,7 +112,7 @@ _ir_word="([Oo][Nn][Aa][Yy]|[Oo][Nn][Aa][Yy][Ll](${_ir_dotless}|[iI])[Yy][Oo][Rr
 first="$(printf '%s' "$prompt" | LC_ALL=C sed -n '1p')"
 code="$(printf '%s' "$first" | LC_ALL=C sed -nE "s/^[[:space:]]*${_ir_word}[[:space:]]+([0-9a-fA-F]{6})[[:space:][:punct:]]*\$/\\3/p" | tr 'A-F' 'a-f')"
 bare=0
-if [ -z "$code" ] && printf '%s' "$first" | LC_ALL=C grep -qE "^[[:space:]]*(${_ir_word}|[Ee][Vv][Ee][Tt][[:space:]]+[Oo][Nn][Aa][Yy][Ll][Aa])[[:space:]]*\$"; then
+if [ -z "$code" ] && printf '%s' "$first" 2>/dev/null | LC_ALL=C grep -qE "^[[:space:]]*(${_ir_word}|[Ee][Vv][Ee][Tt][[:space:]]+[Oo][Nn][Aa][Yy][Ll][Aa])[[:space:]]*\$"; then
   bare=1
 fi
 if [ -n "$code" ] || [ "$bare" = 1 ]; then

@@ -55,6 +55,14 @@ mk_project() {
 run_hook() {
   run "$MK_BASH" -c 'printf "%s" "$2" | "$0" "$1"' "$MK_BASH" "$HOOKS/$1" "$2"
 }
+# run_hook_sigign HOOK PAYLOAD -- run_hook with SIGPIPE ignored, as GitHub
+# Actions starts every step (a pipe writer then gets EPIPE and may print
+# "write error: Broken pipe" instead of dying): $output holds stdout only,
+# the hook's stderr is in the file $hook_err.
+run_hook_sigign() {
+  hook_err="$BATS_TEST_TMPDIR/hook-stderr"
+  run "$MK_BASH" -c 'trap "" PIPE; printf "%s" "$2" 2>/dev/null | "$0" "$1" 2> "$3"' "$MK_BASH" "$HOOKS/$1" "$2" "$hook_err"
+}
 
 # jq on a truly empty stdin processes zero JSON values, so the `// "allow"`
 # default filter never even runs (exit 0, zero output) -- guard against that

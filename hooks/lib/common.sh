@@ -17,7 +17,7 @@ mk_resolve_root() {
   local cwd cdup top
   MK_ROOT="${CLAUDE_PROJECT_DIR:-}"
   if [ -z "$MK_ROOT" ] && command -v jq >/dev/null 2>&1; then
-    cwd="$(printf '%s' "${1:-}" | jq -r '.cwd // empty' 2>/dev/null)"
+    cwd="$(printf '%s' "${1:-}" 2>/dev/null | jq -r '.cwd // empty' 2>/dev/null)"
     if [ -n "$cwd" ] && [ -d "$cwd" ]; then
       # Use --show-cdup (a relative offset) rather than --show-toplevel
       # (an already symlink-resolved absolute path): applying a relative
@@ -71,7 +71,7 @@ _mk_config_pick() {
 '
   [ -n "$MK_CONFIG_LIVE" ] && [ -f "$MK_CONFIG_LIVE" ] || return 0
   [[ $1 =~ $re ]] || return 0
-  out="$(printf '%s' "$1" | jq -r '(if (.agent_id // "") != "" then "sub" else "main" end), (.session_id // "unknown")' 2>/dev/null)" || return 0
+  out="$(printf '%s' "$1" 2>/dev/null | jq -r '(if (.agent_id // "") != "" then "sub" else "main" end), (.session_id // "unknown")' 2>/dev/null)" || return 0
   case "$out" in "sub$nl"*) ;; *) return 0 ;; esac
   f="$(_mk_session_tmp config "${out#"sub$nl"}")"
   if [ -f "$f" ] && [ ! -L "$f" ] && [ -O "$f" ]; then MK_CONFIG="$f"; fi
@@ -83,7 +83,7 @@ mk_active() { [ -n "$MK_ROOT" ] && [ -f "$MK_CONFIG_LIVE" ]; }
 # _mk_session_tmp KIND SID -- this project's per-session state file
 # careful-KIND-<SID>, SID sanitised to [A-Za-z0-9_-] ("unknown" when empty).
 _mk_session_tmp() {
-  mk_tmp "careful-$1-$(printf '%s' "${2:-unknown}" | tr -c 'A-Za-z0-9_-' _)"
+  mk_tmp "careful-$1-$(printf '%s' "${2:-unknown}" 2>/dev/null | tr -c 'A-Za-z0-9_-' _)"
 }
 # _mk_state_write FILE -- stdin to FILE with the safe writer: never through a
 # symlink or over a foreign or non-regular file; atomic (mktemp + mv, umask
@@ -105,12 +105,12 @@ _mk_state_write() {
 # starts with careful- so it is careful-state (a command naming it is denied).
 mk_active_marker_file() {
   local sid
-  sid="$(printf '%s' "$1" | jq -r '.session_id // "unknown"' 2>/dev/null)"
+  sid="$(printf '%s' "$1" 2>/dev/null | jq -r '.session_id // "unknown"' 2>/dev/null)"
   _mk_session_tmp active "$sid"
 }
 # mk_active_marker_write PAYLOAD -- safe writer (_mk_state_write).
 mk_active_marker_write() {
-  printf 'active\n' | _mk_state_write "$(mk_active_marker_file "$1")"
+  printf 'active\n' 2>/dev/null | _mk_state_write "$(mk_active_marker_file "$1")"
 }
 # Config snapshot (0.8.1): session-start.sh copies the validated live config
 # here on startup, resume and clear (not compact); subagent payloads read it
@@ -119,7 +119,7 @@ mk_active_marker_write() {
 # the file tools on it.
 mk_config_snapshot_file() {
   local sid
-  sid="$(printf '%s' "$1" | jq -r '.session_id // "unknown"' 2>/dev/null)"
+  sid="$(printf '%s' "$1" 2>/dev/null | jq -r '.session_id // "unknown"' 2>/dev/null)"
   _mk_session_tmp config "$sid"
 }
 # mk_config_snapshot_write PAYLOAD -- copies MK_CONFIG_LIVE with the safe
@@ -136,7 +136,7 @@ mk_config_vanished() {
   mk_active && return 1
   f="$(mk_active_marker_file "$1")"
   [ -f "$f" ] && [ ! -L "$f" ] && [ -O "$f" ] || return 1
-  printf '%s' "$1" | jq -e '(.agent_id // "") != "" and ((.tool_name // "") as $t
+  printf '%s' "$1" 2>/dev/null | jq -e '(.agent_id // "") != "" and ((.tool_name // "") as $t
     | ($t == "Bash" or $t == "Edit" or $t == "Write" or $t == "MultiEdit" or $t == "NotebookEdit"))' >/dev/null 2>&1
 }
 
@@ -226,8 +226,8 @@ mk_msg() {
 
 mk_tmp() {
   local h
-  h="$(printf '%s' "${MK_ROOT:-none}" | cksum | cut -d' ' -f1)"
-  printf '%s/memokit-%s-%s' "${TMPDIR:-/tmp}" "$h" "$1" | sed 's#//*#/#g'
+  h="$(printf '%s' "${MK_ROOT:-none}" 2>/dev/null | cksum | cut -d' ' -f1)"
+  printf '%s/memokit-%s-%s' "${TMPDIR:-/tmp}" "$h" "$1" 2>/dev/null | sed 's#//*#/#g'
 }
 
 mk_debug_dump() {
@@ -238,7 +238,7 @@ mk_debug_dump() {
 mk_guard_off() { [ "${MEMOKIT_GUARD_OFF:-0}" = "1" ]; }
 
 mk_dirs_human() {
-  printf '%s\n' "$MK_GUARDED_DIRS" | sed '/^$/d; s#$#/#' | paste -sd, - | sed 's/,/, /g'
+  printf '%s\n' "$MK_GUARDED_DIRS" 2>/dev/null | sed '/^$/d; s#$#/#' 2>/dev/null | paste -sd, - 2>/dev/null | sed 's/,/, /g'
 }
 
 # mk_strip_heredoc_bodies TEXT -- TEXT with the BODY lines of every heredoc
@@ -252,7 +252,7 @@ mk_dirs_human() {
 # past the 5 s hook timeout). The last marker is found by splitting the
 # line on < (a marker holds no <), linear in the line.
 mk_strip_heredoc_bodies() {
-  printf '%s\n' "$1" | LC_ALL=C awk '
+  printf '%s\n' "$1" 2>/dev/null | LC_ALL=C awk '
     BEGIN { re = "^-?[[:space:]]*\\\\?[\"\047]?[A-Za-z_][A-Za-z0-9_]*[\"\047]?" }
     {
       if (inh) {

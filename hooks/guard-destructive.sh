@@ -86,7 +86,7 @@ if [ -z "$PAYLOAD" ]; then
 fi
 
 # "T" sentinel: a jq that fails or prints anything else is not trusted.
-if ! tool="$(printf '%s' "$PAYLOAD" | jq -r '"T" + (.tool_name // "" | tostring)' 2>/dev/null)"; then
+if ! tool="$(printf '%s' "$PAYLOAD" 2>/dev/null | jq -r '"T" + (.tool_name // "" | tostring)' 2>/dev/null)"; then
   deny "$(mk_msg CF_INVALID_JSON)"; exit 0
 fi
 case "$tool" in
@@ -97,7 +97,7 @@ esac
 case "$tool" in
   Bash) ;;
   Edit|Write|MultiEdit|NotebookEdit)
-    if ! fpath="$(printf '%s' "$PAYLOAD" | jq -r '(.tool_input.file_path // .tool_input.notebook_path // empty)' 2>/dev/null)"; then
+    if ! fpath="$(printf '%s' "$PAYLOAD" 2>/dev/null | jq -r '(.tool_input.file_path // .tool_input.notebook_path // empty)' 2>/dev/null)"; then
       deny "$(mk_msg CF_INVALID_JSON)"; exit 0
     fi
     # Follow symlink chains (max 10 hops; bash 3.2/BSD-safe, no readlink -f).
@@ -130,7 +130,7 @@ esac
 # jq -r prints a \u0000 in the command as a raw NUL, which $(...) drops: the
 # text checked would differ from the command run. One jq call flags it ("N")
 # or returns the command behind a "Y" sentinel.
-if ! cmd="$(printf '%s' "$PAYLOAD" | jq -r '(.tool_input.command // "" | tostring) as $c
+if ! cmd="$(printf '%s' "$PAYLOAD" 2>/dev/null | jq -r '(.tool_input.command // "" | tostring) as $c
     | if ($c | explode | any(. == 0)) then "N" else "Y" + $c end' 2>/dev/null)"; then
   deny "$(mk_msg CF_INVALID_JSON)"; exit 0
 fi
@@ -169,7 +169,7 @@ mk_careful_single_rm "$cmd" && single_rm=1
 _q="[\"'\\\\]*"
 re_rmword="(^|[^[:alnum:]_.-])${_q}[Rr]${_q}[Mm]${_q}([^[:alnum:]_.-]|\$)"
 if [ "$single_rm" -eq 1 ] || [[ $cmd =~ $re_rmword ]]; then
-  if [ "$(printf '%s' "$PAYLOAD" | jq -r 'if (.agent_id // "") != "" then "sub" else "main" end' 2>/dev/null)" = main ]; then
+  if [ "$(printf '%s' "$PAYLOAD" 2>/dev/null | jq -r 'if (.agent_id // "") != "" then "sub" else "main" end' 2>/dev/null)" = main ]; then
     MK_CF_MAIN=1
   fi
   # shellcheck source-path=SCRIPTDIR source=lib/temp.sh
@@ -224,7 +224,7 @@ _mk_gd_cleanup_only() {
 if _mk_gd_cleanup_only "$labels"; then
   wcwd=""
   # "T<main|sub>C<cwd>E": the E keeps a cwd's trailing newline from being cut.
-  wf="$(printf '%s' "$PAYLOAD" | jq -r '"T" + (if (.agent_id // "") != "" then "sub" else "main" end) + "C" + (.cwd // "" | tostring) + "E"' 2>/dev/null)" || wf=""
+  wf="$(printf '%s' "$PAYLOAD" 2>/dev/null | jq -r '"T" + (if (.agent_id // "") != "" then "sub" else "main" end) + "C" + (.cwd // "" | tostring) + "E"' 2>/dev/null)" || wf=""
   case "$wf" in TmainC/*E) wcwd="${wf#TmainC}"; wcwd="${wcwd%E}" ;; esac
   case "$wcwd" in *"$nl"*) wcwd="" ;; esac
   # shellcheck source-path=SCRIPTDIR source=lib/worktrees.sh
@@ -251,7 +251,7 @@ _has() { case "$nl$labels$nl" in *"$nl$1$nl"*) return 0 ;; esac; return 1; }
 # prints anything else leaves the fail-closed defaults: a subagent (no
 # pending write, no window pass) running in the background.
 IS_SUB="sub"; BG="bg"; SESSION="unknown"; TUID=""
-if pf="$(printf '%s' "$PAYLOAD" | jq -r '"T" + (if (.agent_id // "") != "" then "sub" else "main" end)
+if pf="$(printf '%s' "$PAYLOAD" 2>/dev/null | jq -r '"T" + (if (.agent_id // "") != "" then "sub" else "main" end)
     + (if (.tool_input.run_in_background // false) == false then " fg" else " bg" end),
     "S" + (.session_id // "unknown" | tostring | explode | map(if . < 33 or . == 127 then 95 else . end) | implode),
     "U" + (.tool_use_id // "" | tostring | explode | map(if . < 33 or . == 127 then 95 else . end) | implode)' 2>/dev/null)"; then
@@ -264,15 +264,15 @@ if pf="$(printf '%s' "$PAYLOAD" | jq -r '"T" + (if (.agent_id // "") != "" then 
       case "$pf3" in
         U*)
           IS_SUB="${pf1#T}"; IS_SUB="${IS_SUB% *}"; BG="${pf1##* }"
-          SESSION="$(printf '%s' "${pf2#S}" | tr -c 'A-Za-z0-9_-' _)"
-          TUID="$(printf '%s' "${pf3#U}" | tr -c 'A-Za-z0-9_-' _)" ;;
+          SESSION="$(printf '%s' "${pf2#S}" 2>/dev/null | tr -c 'A-Za-z0-9_-' _)"
+          TUID="$(printf '%s' "${pf3#U}" 2>/dev/null | tr -c 'A-Za-z0-9_-' _)" ;;
       esac ;;
   esac
 fi
 [ -n "$SESSION" ] || SESSION=unknown
 # Running-marker key, as check-disk.sh's: the sanitised tool_use_id, or
 # c-<session>-<cksum of the command> when the payload has none.
-[ -n "$TUID" ] || TUID="c-${SESSION}-$(printf '%s' "$cmd" | cksum | cut -d' ' -f1)"
+[ -n "$TUID" ] || TUID="c-${SESSION}-$(printf '%s' "$cmd" 2>/dev/null | cksum | cut -d' ' -f1)"
 
 code="$(mk_careful_code "$cmd")"
 # An exact single-use grant passes any command, remote ones included, but is
@@ -345,7 +345,7 @@ plan_deny() {
 }
 
 if [ -n "$targets" ]; then
-  tlist="$(printf '%s' "$targets" | tr '\n' ' ')"; tlist="${tlist% }"
+  tlist="$(printf '%s' "$targets" 2>/dev/null | tr '\n' ' ')"; tlist="${tlist% }"
   rall="${labels//$nl/, } → $tlist"
   wline="$(mk_careful_window_get "$SESSION")" || wline=""
   # No Post event reports a background command's failure: never in a window.
@@ -376,14 +376,14 @@ if [ -n "$targets" ]; then
   # covered ssh segments, the worst passing command, 0.9 s hook wall time.
   # Sentinels: a check or a labelling that dies half way never passes.
   shape=0
-  nsep="$(set -o pipefail; printf '%s' "$cmd" | LC_ALL=C tr -cd ';|&\n' | sed 's/&&/\&/g' | wc -c)" || nsep=x
+  nsep="$(set -o pipefail; printf '%s' "$cmd" 2>/dev/null | LC_ALL=C tr -cd ';|&\n' 2>/dev/null | sed 's/&&/\&/g' 2>/dev/null | wc -c)" || nsep=x
   nsep="${nsep//[[:space:]]/}"
   case "$nsep" in ''|*[!0-9]*) nsep=999999 ;; esac
   rest_labels="$labels"
   # The payload cwd (the Bash tool's working directory), "C" sentinel; a
   # runbook path is resolved against it (no cwd: no runbook pass).
   cwd=""
-  if pc="$(printf '%s' "$PAYLOAD" | jq -r '"C" + (.cwd // "" | tostring)' 2>/dev/null)"; then
+  if pc="$(printf '%s' "$PAYLOAD" 2>/dev/null | jq -r '"C" + (.cwd // "" | tostring)' 2>/dev/null)"; then
     case "$pc" in C*) cwd="${pc#C}" ;; esac
     case "$cwd" in *"$nl"*) cwd="" ;; esac
   fi

@@ -2327,7 +2327,7 @@ _mk_rm_patterns() {
   while read -r idx lab tgt; do
     [ -n "$idx" ] || continue
     re="$(_mk_cf_pattern "$idx" match)" || { printf 'unparsed\t\t\n'; continue; }
-    out="$(printf '%s\n' "$1" | grep -Ei -- "$re" 2>/dev/null)" || continue
+    out="$(printf '%s\n' "$1" 2>/dev/null | grep -Ei -- "$re" 2>/dev/null)" || continue
     while IFS= read -r seg; do
       printf '%s\t%s\t%s\n' "$lab" "pattern:$tgt" "$seg"
     done <<EOF

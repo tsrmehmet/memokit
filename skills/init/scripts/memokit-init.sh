@@ -66,7 +66,7 @@ mk_detect_docs_site() {
   local root="$1" f dir
   for f in "$root/mkdocs.yml" "$root/mkdocs.yaml"; do
     [ -f "$f" ] || continue
-    dir="$(sed -n 's/^docs_dir:[[:space:]]*//p' "$f" | head -n 1 | tr -d "\"'" | sed 's/[[:space:]]*#.*$//; s/[[:space:]]*$//; s|^\./||; s|/$||')"
+    dir="$(sed -n 's/^docs_dir:[[:space:]]*//p' "$f" 2>/dev/null | head -n 1 | tr -d "\"'" | sed 's/[[:space:]]*#.*$//; s/[[:space:]]*$//; s|^\./||; s|/$||')"
     if [ -z "$dir" ] || [ "$dir" = docs ]; then printf 'mkdocs'; fi
     return 0
   done
@@ -574,7 +574,7 @@ cmd_extract_legacy() {
   hooks="$root/.claude/hooks"
 
   if [ -f "$hooks/inject-rules.sh" ]; then
-    tag="$(grep -o -E '\[[A-Z][A-Z0-9]{1,9}-KURAL\]' "$hooks/inject-rules.sh" | head -n 1 | sed -E 's/^\[(.*)-KURAL\]$/\1/' || true)"
+    tag="$(grep -o -E '\[[A-Z][A-Z0-9]{1,9}-KURAL\]' "$hooks/inject-rules.sh" 2>/dev/null | head -n 1 | sed -E 's/^\[(.*)-KURAL\]$/\1/' || true)"
     rules="$(mk_legacy_rules "$hooks/inject-rules.sh")"
     hints_tsv="$(mk_legacy_hints "$hooks/inject-rules.sh")"
   fi
@@ -585,7 +585,7 @@ cmd_extract_legacy() {
   if [ -f "$hooks/guard-edit.sh" ]; then
     # The patterns below match a literal `$ROOT_LOWER` in legacy source text.
     # shellcheck disable=SC2016
-    gdirs="$(grep 'LEXICAL_MATCH=1 ;;' "$hooks/guard-edit.sh" | head -n 1 \
+    gdirs="$(grep 'LEXICAL_MATCH=1 ;;' "$hooks/guard-edit.sh" 2>/dev/null | head -n 1 \
       | grep -o -E '"\$ROOT_LOWER/[^"*]+"' | sed -E 's/^"\$ROOT_LOWER\/(.*)"$/\1/' | awk '!seen[$0]++' || true)"
   fi
   if [ -f "$hooks/check-context-budget.sh" ]; then

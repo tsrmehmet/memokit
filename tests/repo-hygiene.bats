@@ -91,3 +91,12 @@ load helpers
   run grep -nE '\$\{?BATS_TMPDIR(:-/tmp)?\}?/' "$MK_REPO"/tests/*.bats "$MK_REPO"/tests/*.bash
   [ -z "$output" ] || { echo "$output"; false; }
 }
+# GitHub Actions starts every step with SIGPIPE ignored: a printf feeding a
+# reader that may stop early (grep -q, head) then gets EPIPE and prints
+# "write error: Broken pipe" into the hook output. Such a printf drops its
+# stderr (the single-line form; pipelines over several lines are quieted as
+# a group, see lib/careful.sh and guard-subagent-authority.sh).
+@test "hooks: a printf piped into grep -q or head drops its stderr" {
+  run bash -c "cd '$MK_REPO' && grep -nE 'printf [^|]*[|] *(LC_ALL=C +)?(grep +(-[A-Za-z]+ +)*-[A-Za-z]*q|head)' hooks/*.sh hooks/lib/*.sh | grep -vE 'printf [^|]*2>/dev/null *[|]' | grep -vE '^[^:]+:[0-9]+: *#' || true"
+  [ -z "$output" ] || { echo "$output"; false; }
+}

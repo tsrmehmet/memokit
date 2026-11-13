@@ -31,7 +31,7 @@ mk_graph_status() {
     MK_GRAPH_LINE="$(mk_msg GR_NO_GIT)"; return 2
   fi
   marker="$(tr -d ' \t\r\n' < "$out/.graph_commit" 2>/dev/null)"
-  if ! printf '%s' "$marker" | grep -Eq '^[0-9a-fA-F]{40}$' ||
+  if ! printf '%s' "$marker" 2>/dev/null | grep -Eq '^[0-9a-fA-F]{40}$' ||
      ! git -C "$MK_ROOT" cat-file -e "${marker}^{commit}" 2>/dev/null; then
     MK_GRAPH_LINE="$(mk_msg GR_BAD_MARKER "$MK_GRAPH_HELPER")"; return 2
   fi

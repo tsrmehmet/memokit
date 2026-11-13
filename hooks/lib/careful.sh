@@ -202,8 +202,8 @@ _mk_cf_rule() {
   for re in "$@"; do
     rc=0
     case "$re" in
-      '!'*) cur="$(printf '%s\n' "$cur" | grep -Ev -- "${re#!}" 2>/dev/null)" || rc=$? ;;
-      *) cur="$(printf '%s\n' "$cur" | grep -E -- "$re" 2>/dev/null)" || rc=$? ;;
+      '!'*) cur="$(printf '%s\n' "$cur" 2>/dev/null | grep -Ev -- "${re#!}" 2>/dev/null)" || rc=$? ;;
+      *) cur="$(printf '%s\n' "$cur" 2>/dev/null | grep -E -- "$re" 2>/dev/null)" || rc=$? ;;
     esac
     # grep exits 1 for "no line"; more is an error: fail closed, a match.
     [ "$rc" -gt 1 ] && return 0
@@ -541,7 +541,7 @@ EOF
 # not continue; mk_careful_labels also matches the stripped-raw text for those.
 # Used for matching only; approval codes stay on the raw command text.
 mk_careful_join() {
-  printf '%s\n' "$1" | awk 'match($0, /\\+$/) && RLENGTH % 2 == 1 { buf = buf substr($0, 1, length($0) - 1); next } { print buf $0; buf = "" } END { if (buf != "") print buf }'
+  printf '%s\n' "$1" 2>/dev/null | awk 'match($0, /\\+$/) && RLENGTH % 2 == 1 { buf = buf substr($0, 1, length($0) - 1); next } { print buf $0; buf = "" } END { if (buf != "") print buf }'
 }
 
 # mk_careful_strip CMD -- like mk_careful_join, except a continuation is NOT
@@ -550,7 +550,7 @@ mk_careful_join() {
 # still removed there and the next line stays separate. Matched in union with
 # the joined text so such lines are never hidden.
 mk_careful_strip() {
-  printf '%s\n' "$1" | awk '/<</ { hd = 1 } match($0, /\\+$/) && RLENGTH % 2 == 1 { $0 = substr($0, 1, length($0) - 1); if (!hd && $0 !~ /[#'"'"']/) { buf = buf $0; next } } { print buf $0; buf = "" } END { if (buf != "") print buf }'
+  printf '%s\n' "$1" 2>/dev/null | awk '/<</ { hd = 1 } match($0, /\\+$/) && RLENGTH % 2 == 1 { $0 = substr($0, 1, length($0) - 1); if (!hd && $0 !~ /[#'"'"']/) { buf = buf $0; next } } { print buf $0; buf = "" } END { if (buf != "") print buf }'
 }
 
 # mk_careful_flat TEXT -- the flat view, in one linear sed pass (no parser).
@@ -579,7 +579,7 @@ mk_careful_strip() {
 mk_careful_flat() {
   local out nl='
 ' tok="mk-sentinel-$$-$RANDOM-$RANDOM"
-  out="$(printf '%s\n%s\n' "$1" "$tok" | LC_ALL=C sed -E -e 's/["'\''\\]//g' -e 's/\$\{/$/g' -e 's/:-/ /g' \
+  out="$(printf '%s\n%s\n' "$1" "$tok" 2>/dev/null | LC_ALL=C sed -E -e 's/["'\''\\]//g' -e 's/\$\{/$/g' -e 's/:-/ /g' \
     -e '/[{]/s/,/ /g' -e 's/[`(){}]/ /g' -e 's/\.[Ee][Xx][Ee]([^[:alnum:]_.-]|$)/\1/g' \
     -e 's/(^|[^[:alnum:]_.$-])[Rr][Mm]/\1rm/g' \
     -e 's/(^|[^[:alnum:]_.$-])[Gg][Ii][Tt]/\1git/g' \
@@ -604,7 +604,7 @@ mk_careful_flat() {
 # that depends on a segment's first word (the DYNRM exemption) only applies
 # when the whole command is one segment.
 mk_careful_segments() {
-  printf '%s\n' "$1" | awk '{ gsub(/&&|\|\||;|\|/, "\n"); gsub(/[[:space:]]&[[:space:]]/, "\n"); print }'
+  printf '%s\n' "$1" 2>/dev/null | awk '{ gsub(/&&|\|\||;|\|/, "\n"); gsub(/[[:space:]]&[[:space:]]/, "\n"); print }'
 }
 
 # _mk_cf_exempt TEXT -- true when TEXT matches MK_CF_DYNEXEMPT, byte-wise: in a
@@ -658,7 +658,7 @@ _mk_cf_wt_skip() {
 mk_careful_builtin() {
   local segs all rmsegs seg flat n rc=0 nl='
 ' tok="mk-sentinel-$$-$RANDOM-$RANDOM"
-  if ! flat="$(printf '%s' "$1" | tr '\n' ' ')" || _mk_cf_empty "$1" "$flat"; then printf 'unparsed\n'; flat="$1"; fi
+  if ! flat="$(printf '%s' "$1" 2>/dev/null | tr '\n' ' ')" || _mk_cf_empty "$1" "$flat"; then printf 'unparsed\n'; flat="$1"; fi
   if { _mk_cf_has '(^|[^[:alnum:]_])(psql|pgcli|mysql|mariadb|sqlite3|sqlcmd)([^[:alnum:]_./-]|$)' "$1" i &&
        _mk_cf_has '(^|[^[:alnum:]_])(drop[[:space:]]+(table|database|schema)|truncate|delete[[:space:]]+from)([^[:alnum:]_]|$)' "$1$nl$flat" i; } ||
      _mk_cf_has '(^|[^[:alnum:]_.-])(dropdb|mysqladmin([[:space:]]+[^[:space:]]+)*[[:space:]]+drop)([[:space:]]|$)' "$1" i; then
@@ -674,7 +674,7 @@ mk_careful_builtin() {
   esac
   # Only segments naming a tool (or holding a word the shell computes) can
   # match a segment rule; drop the rest and duplicates once, not per rule.
-  segs="$(printf '%s\n' "$all" | awk -v s="$tok" '/git|rm|kubectl|helm|docker|dotnet|[$*?]|\[/ && !seen[$0]++ { print } END { print s }')"
+  segs="$(printf '%s\n' "$all" 2>/dev/null | awk -v s="$tok" '/git|rm|kubectl|helm|docker|dotnet|[$*?]|\[/ && !seen[$0]++ { print } END { print s }')"
   case "$segs" in
     "$tok") segs="" ;;
     *"$nl$tok") segs="${segs%"$nl$tok"}" ;;
@@ -716,7 +716,7 @@ mk_careful_builtin() {
   # segment) skips this rule, nothing can run but the first word; absent or
   # anything else: the plain 0.7.1 rule over all views, fail closed.
   if [ "${2:-0}" != 1 ] && _mk_cf_rule "$segs" "$MK_CF_DYNRM"; then printf 'rm-recursive\n'; fi
-  rmsegs="$(printf '%s\n' "$segs" | grep -E '(^|[^[:alnum:]_.-])rm[[:space:]]' 2>/dev/null)" || rc=$?
+  rmsegs="$(printf '%s\n' "$segs" 2>/dev/null | grep -E '(^|[^[:alnum:]_.-])rm[[:space:]]' 2>/dev/null)" || rc=$?
   if [ "$rc" -gt 1 ]; then printf 'unparsed\n'; rmsegs="$segs"; fi
   n=0
   while IFS= read -r seg; do
@@ -738,14 +738,14 @@ EOF
 }
 
 # _mk_cf_pattern I FIELD -- field of the I-th project pattern (jq -r adds the newline).
-_mk_cf_pattern() { printf '%s' "$MK_CAREFUL_PATTERNS_JSON" | jq -r ".[$1].$2" 2>/dev/null; }
+_mk_cf_pattern() { printf '%s' "$MK_CAREFUL_PATTERNS_JSON" 2>/dev/null | jq -r ".[$1].$2" 2>/dev/null; }
 
 # mk_careful_project CMD -- labels of matching project patterns. A regex
 # grep -E rejects makes grep exit 2, i.e. no match: only that pattern is off
 # (session start names it). A failing jq prints unparsed instead.
 mk_careful_project() {
   local n i re lab
-  n="$(printf '%s' "$MK_CAREFUL_PATTERNS_JSON" | jq 'length' 2>/dev/null)" || { printf 'unparsed\n'; return 0; }
+  n="$(printf '%s' "$MK_CAREFUL_PATTERNS_JSON" 2>/dev/null | jq 'length' 2>/dev/null)" || { printf 'unparsed\n'; return 0; }
   i=0
   while [ "$i" -lt "${n:-0}" ]; do
     re="$(_mk_cf_pattern "$i" match)" || { printf 'unparsed\n'; return 0; }
@@ -863,10 +863,10 @@ _mk_cf_labels() {
   # the raw text, on it with quotes, backslashes and newlines deleted, and on
   # a sentinel line that must count. A tr or grep that fails or prints
   # nothing gives careful-state too: the check could not be made.
-  if ! t="$(printf '%s' "$1" | LC_ALL=C tr -d "\\n\"'\\\\")" || _mk_cf_empty "$1" "$t"; then
+  if ! t="$(printf '%s' "$1" 2>/dev/null | LC_ALL=C tr -d "\\n\"'\\\\")" || _mk_cf_empty "$1" "$t"; then
     printf 'careful-state\nunparsed\n'; t=""
   fi
-  n="$(printf '%s\n%s\ncareful-grants\n' "$1" "$t" | grep -ciE "$MK_CF_STATE_RE")"
+  n="$(printf '%s\n%s\ncareful-grants\n' "$1" "$t" 2>/dev/null | grep -ciE "$MK_CF_STATE_RE")"
   case "$n" in
     1) ;;
     ''|*[!0-9]*|0) printf 'careful-state\nunparsed\n' ;;
@@ -977,7 +977,7 @@ EOF
 # mk_careful_bad_patterns -- labels of project patterns grep -E rejects.
 mk_careful_bad_patterns() {
   local n i rc
-  n="$(printf '%s' "$MK_CAREFUL_PATTERNS_JSON" | jq 'length' 2>/dev/null)" || n=0
+  n="$(printf '%s' "$MK_CAREFUL_PATTERNS_JSON" 2>/dev/null | jq 'length' 2>/dev/null)" || n=0
   i=0
   while [ "$i" -lt "${n:-0}" ]; do
     rc=0
@@ -999,7 +999,7 @@ _mk_cf_sha256() {
 # mk_careful_code CMD -- approval code bound to this project root and the
 # exact command text (one changed character gives another code).
 mk_careful_code() {
-  printf '%s\n%s' "$MK_ROOT" "$1" | _mk_cf_sha256 | cut -c1-6
+  printf '%s\n%s' "$MK_ROOT" "$1" 2>/dev/null | _mk_cf_sha256 | cut -c1-6
 }
 
 mk_careful_grants_file() { mk_tmp careful-grants; }
@@ -1043,8 +1043,8 @@ mk_careful_consume() {
 # mk_careful_code.
 mk_careful_targets_code() {
   local list
-  list="$(printf '%s\n' "$1" | LC_ALL=C sort -u | sed '/^$/d')"
-  printf '%s\n%s' "$MK_ROOT" "$list" | _mk_cf_sha256 | cut -c1-6
+  list="$(printf '%s\n' "$1" 2>/dev/null | LC_ALL=C sort -u 2>/dev/null | sed '/^$/d')"
+  printf '%s\n%s' "$MK_ROOT" "$list" 2>/dev/null | _mk_cf_sha256 | cut -c1-6
 }
 
 # _mk_cf_words LIST -- newline list -> sorted unique targets on one line,
@@ -1052,11 +1052,11 @@ mk_careful_targets_code() {
 # whitespace or a glob character (* ? [ ]), so a line in the pending/window files is always plain words.
 _mk_cf_words() {
   local list flat
-  flat="$(printf '%s' "$1" | tr -d '\n')"
+  flat="$(printf '%s' "$1" 2>/dev/null | tr -d '\n')"
   case "$flat" in
     *[[:space:]]*|*'*'*|*'?'*|*'['*|*']'*) return 1 ;;
   esac
-  list="$(printf '%s\n' "$1" | LC_ALL=C sort -u | sed '/^$/d' | tr '\n' ' ')"
+  list="$(printf '%s\n' "$1" 2>/dev/null | LC_ALL=C sort -u 2>/dev/null | sed '/^$/d' 2>/dev/null | tr '\n' ' ')"
   [ -n "$list" ] || return 1
   printf '%s' "${list% }"
 }
@@ -1077,7 +1077,7 @@ _mk_cf_write() {
 
 # mk_careful_pending_file SESSION -- the session's pending plan file.
 mk_careful_pending_file() {
-  mk_tmp "careful-pending-$(printf '%s' "$1" | tr -c 'A-Za-z0-9_-' _)"
+  mk_tmp "careful-pending-$(printf '%s' "$1" 2>/dev/null | tr -c 'A-Za-z0-9_-' _)"
 }
 
 # mk_careful_pending_set SESSION CODE [TARGETS] -- remember the plan code the
@@ -1105,7 +1105,7 @@ mk_careful_pending_set() {
 # mk_careful_pending_req_file SESSION -- sibling of the pending file holding
 # the code a memokit-window.sh request minted in this session.
 mk_careful_pending_req_file() {
-  mk_tmp "careful-pending-req-$(printf '%s' "$1" | tr -c 'A-Za-z0-9_-' _)"
+  mk_tmp "careful-pending-req-$(printf '%s' "$1" 2>/dev/null | tr -c 'A-Za-z0-9_-' _)"
 }
 
 # mk_careful_pending_req_set SESSION CODE -- record that a request minted CODE.
@@ -1167,7 +1167,7 @@ mk_careful_pending_get() {
 # window file careful-window-<session> and the failed marker
 # careful-window-failed-<session>, the session id sanitised as the pending
 # file's.
-_mk_cf_sess() { printf '%s' "$1" | tr -c 'A-Za-z0-9_-' _; }
+_mk_cf_sess() { printf '%s' "$1" 2>/dev/null | tr -c 'A-Za-z0-9_-' _; }
 mk_careful_window_file() { mk_tmp "careful-window-$(_mk_cf_sess "$1")"; }
 _mk_cf_window_failed_file() { mk_tmp "careful-window-failed-$(_mk_cf_sess "$1")"; }
 
@@ -1235,7 +1235,7 @@ mk_careful_window_close() {
   _mk_cf_unsafe "$f" || rm -f "$f"
   if [ -n "${2:-}" ]; then
     ff="$(_mk_cf_window_failed_file "$1")"
-    _mk_cf_write "$ff" "$(printf '%s\n' "$2" | head -n 1)"
+    _mk_cf_write "$ff" "$(printf '%s\n' "$2" 2>/dev/null | head -n 1)"
   fi
   return 0
 }

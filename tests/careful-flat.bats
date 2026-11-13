@@ -711,3 +711,19 @@ XEOF
   "$MK_BASH" -c 'trap "" PIPE; printf "%s" "$1" | "$0" "$2" > /dev/null 2> "$3"' "$MK_BASH" "$(prompt_payload "$big")" "$HOOKS/inject-rules.sh" "$BATS_TEST_TMPDIR/err2"
   [ ! -s "$BATS_TEST_TMPDIR/err2" ] || { cat "$BATS_TEST_TMPDIR/err2"; false; }
 }
+
+# CI fix (0.8.1): a rule grep that fails before reading (a bad ERE; CI: the
+# broken-grep stub of "0.5.2 fix 3") left the segments' printf writing into
+# a closed pipe: "printf: write error: Broken pipe" came before the decision.
+# 200 KB of segments outlast the pipe buffer, so the EPIPE is certain.
+@test "0.8.1: with SIGPIPE ignored, a rule grep that fails before reading writes nothing to stderr" {
+  # (in a file: one 200 KB argument exceeds Linux's per-argument limit)
+  rep 'git status --short
+' 10000 > "$BATS_TEST_TMPDIR/segs"
+  run "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; . '$HOOKS/lib/careful.sh'; trap '' PIPE
+    big=\"\$(cat \"\$1\")\"
+    _mk_cf_rule \"\$big\" '(' && echo rule-err
+    _mk_cf_rule \"\$big\" 'git' '!(' && echo neg-err" _ "$BATS_TEST_TMPDIR/segs"
+  [ "$output" = "rule-err
+neg-err" ] || { printf '%s\n' "$output" | head -5; false; }
+}

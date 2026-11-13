@@ -1588,6 +1588,20 @@ mk_dogfood() {
   tool_write Write "$PROJ/src/fl3.sh"
   [ "$(decision)" = "allow" ] || { echo "denied: $(reason)"; false; }
 }
+# CI fix (0.8.1): GitHub Actions ignores SIGPIPE. The phys awk stops at the
+# first hit while its writer still prints every joined path; the writer's
+# "write error: Broken pipe" then reached the hook output and the decision
+# could not be read (CI: "echo x > src/fl.sh" allowed). The hit comes first
+# here and 3000 more paths outlast the pipe buffer, so the EPIPE is certain.
+@test "plugins fix 2: with SIGPIPE ignored, an early symlink hit in a long command denies with no stderr" {
+  mk_dogfood
+  ln -s "$HOME/.claude/plugins/cache/other/p/1.0/x.sh" "$PROJ/src/fl.sh"
+  c="echo x > src/fl.sh; touch$(awk 'BEGIN { for (i = 0; i < 3000; i++) printf " w%d", i }')"
+  run_hook_sigign guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
+  [ ! -s "$hook_err" ] || { head -3 "$hook_err"; false; }
+  [ "$(decision)" = "deny" ] || { echo "allowed: $output"; false; }
+  reason | grep -qF "another plugin's installed files" || { echo "wrong reason: $(reason)"; false; }
+}
 @test "plugins fix 2: no exemption without CLAUDE_PROJECT_DIR or inside an installed plugin" {
   mk_dogfood
   unset CLAUDE_PROJECT_DIR

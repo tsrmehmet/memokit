@@ -576,7 +576,7 @@ mk_integrity_mark() {
   local old=""
   if [ -L "$1" ] || { [ -e "$1" ] && [ ! -f "$1" ] && [ ! -d "$1" ]; }; then rm -f "$1" 2>/dev/null; fi
   if [ -f "$1" ] && [ ! -L "$1" ] && [ -O "$1" ]; then old="$(head -n 50 "$1")"; fi
-  printf '%s\n%s\n' "$old" "$2" | LC_ALL=C awk 'NF && !seen[$0]++' | head -n 50 | _mk_state_write "$1"
+  { printf '%s\n%s\n' "$old" "$2" | LC_ALL=C awk 'NF && !seen[$0]++'; } 2>/dev/null | head -n 50 | _mk_state_write "$1"
 }
 
 # mk_integrity_label PATH -- a fixed label for a protected path (S39: never
@@ -628,7 +628,7 @@ mk_integrity_list() {
     [ "$n" -le 10 ] || continue
     out="${out:+$out, }$(mk_integrity_label "$l")"
   done <<EOF
-$(LC_ALL=C tr -d '\000-\011\013-\037\177' | head -n 50)
+$(LC_ALL=C tr -d '\000-\011\013-\037\177' 2>/dev/null | head -n 50)
 EOF
   [ "$n" -gt 10 ] && out="$out $(mk_msg IG_MORE "$((n - 10))")"
   [ -n "$out" ] || out="$(mk_msg IG_L_OTHER)"
@@ -649,7 +649,7 @@ mk_integrity_rules() {
     r="$(printf '%s' "$r" | LC_ALL=C tr -cd 'A-Za-z0-9 ._:/*()=@,+~-' | cut -c1-80)"
     out="${out:+$out; }$(mk_integrity_label "$p"): $r"
   done <<EOF
-$(LC_ALL=C tr -d '\000-\011\013-\037\177' | head -n 50)
+$(LC_ALL=C tr -d '\000-\011\013-\037\177' 2>/dev/null | head -n 50)
 EOF
   [ "$n" -gt 10 ] && out="$out $(mk_msg IG_MORE "$((n - 10))")"
   printf '%s' "$out"
