@@ -531,3 +531,88 @@ $TT_SID:n" ]
   run tl "chmod 770 '$TT_ROOT'; mk_temp_rm_safe '$TT_PROJ/$(uuid 1)' && echo ok || echo no"
   [ "${lines[0]}" = "no" ]
 }
+
+# --- 0.8.1: mk_state_prune ---------------------------------------------------
+# sp DIR [DAYS] -- run mk_state_prune and print its count.
+sp() { "$MK_BASH" -c '. "$0/lib/common.sh"; . "$0/lib/temp.sh"; mk_state_prune "$@"' "$HOOKS" "$@"; }
+sp_dir() { SPD="$(mktemp -d "${BATS_TEST_TMPDIR:-${TMPDIR:-/tmp}}/sp.XXXXXX")"; }
+sp_old() { touch -t "$(date -v-"$2"d +%Y%m%d%H%M 2>/dev/null || date -d "$2 days ago" +%Y%m%d%H%M)" "$1"; }
+
+@test "state prune: removes 8-day-old files and dirs, keeps 6-day-old ones" {
+  sp_dir
+  : > "$SPD/memokit-123-careful-window-s1"; sp_old "$SPD/memokit-123-careful-window-s1" 8
+  mkdir "$SPD/memokit-123-subagent-bg"; : > "$SPD/memokit-123-subagent-bg/f"
+  sp_old "$SPD/memokit-123-subagent-bg/f" 8; sp_old "$SPD/memokit-123-subagent-bg" 8
+  : > "$SPD/memokit-123-young"; sp_old "$SPD/memokit-123-young" 6
+  run sp "$SPD"
+  [ "$status" -eq 0 ]; [ "$output" = "2" ]
+  [ ! -e "$SPD/memokit-123-careful-window-s1" ]
+  [ ! -e "$SPD/memokit-123-subagent-bg" ]
+  [ -e "$SPD/memokit-123-young" ]
+}
+@test "state prune: an old symlink goes, its target stays" {
+  sp_dir
+  : > "$SPD/target"; sp_old "$SPD/target" 30
+  ln -s "$SPD/target" "$SPD/memokit-123-x"
+  if [ "$(uname)" = Darwin ]; then touch -h -t 202001010000 "$SPD/memokit-123-x"; else touch -h -d "30 days ago" "$SPD/memokit-123-x"; fi
+  run sp "$SPD"
+  [ "$output" = "1" ]
+  [ ! -L "$SPD/memokit-123-x" ]; [ -e "$SPD/target" ]
+}
+@test "state prune: names outside the memokit-<digits>-* pattern are kept" {
+  sp_dir
+  for n in memokit-notes.txt memokit-abc-x other-123-x memokit-12ab-x; do : > "$SPD/$n"; sp_old "$SPD/$n" 30; done
+  run sp "$SPD"
+  [ "$output" = "0" ]
+  for n in memokit-notes.txt memokit-abc-x other-123-x memokit-12ab-x; do [ -e "$SPD/$n" ]; done
+}
+@test "state prune: a second call within 24 h removes nothing" {
+  sp_dir
+  : > "$SPD/memokit-1-a"; sp_old "$SPD/memokit-1-a" 9
+  run sp "$SPD"; [ "$output" = "1" ]
+  [ -e "$SPD/memokit-prune-stamp" ]
+  : > "$SPD/memokit-1-b"; sp_old "$SPD/memokit-1-b" 9
+  run sp "$SPD"; [ "$output" = "0" ]
+  [ -e "$SPD/memokit-1-b" ]
+  sp_old "$SPD/memokit-prune-stamp" 2
+  run sp "$SPD"; [ "$output" = "1" ]
+}
+@test "state prune: DIR with a trailing slash and with a space" {
+  sp_dir
+  mkdir "$SPD/a b"; : > "$SPD/a b/memokit-5-x"; sp_old "$SPD/a b/memokit-5-x" 9
+  run sp "$SPD/a b/"
+  [ "$output" = "1" ]; [ ! -e "$SPD/a b/memokit-5-x" ]
+}
+@test "state prune: default DIR is TMPDIR, falling back to /tmp when unset" {
+  sp_dir
+  : > "$SPD/memokit-5-x"; sp_old "$SPD/memokit-5-x" 9
+  run env TMPDIR="$SPD/" "$MK_BASH" -c '. "$0/lib/common.sh"; . "$0/lib/temp.sh"; mk_state_prune' "$HOOKS"
+  [ "$output" = "1" ]
+  run env -u TMPDIR "$MK_BASH" -c '. "$0/lib/common.sh"; . "$0/lib/temp.sh"; type mk_state_prune >/dev/null && echo defined' "$HOOKS"
+  [ "$output" = "defined" ]
+}
+@test "state prune: a stamp dated in the future does not block pruning" {
+  sp_dir
+  : > "$SPD/memokit-prune-stamp"; touch -t 203001010000 "$SPD/memokit-prune-stamp"
+  : > "$SPD/memokit-1-a"; sp_old "$SPD/memokit-1-a" 9
+  run sp "$SPD"; [ "$output" = "1" ]
+  [ ! -e "$SPD/memokit-1-a" ]
+  # rewritten with a current date: the next call is gated
+  : > "$SPD/memokit-1-b"; sp_old "$SPD/memokit-1-b" 9
+  run sp "$SPD"; [ "$output" = "0" ]
+}
+@test "state prune: a symlinked stamp is not trusted, not written through, and ends a regular file" {
+  sp_dir
+  : > "$SPD/target"; printf 'keep' > "$SPD/target"
+  ln -s "$SPD/target" "$SPD/memokit-prune-stamp"
+  : > "$SPD/memokit-1-a"; sp_old "$SPD/memokit-1-a" 9
+  run sp "$SPD"; [ "$output" = "1" ]
+  [ "$(cat "$SPD/target")" = keep ]
+  [ -f "$SPD/memokit-prune-stamp" ] && [ ! -L "$SPD/memokit-prune-stamp" ]
+}
+@test "state prune: a DIR starting with a dash is not read as a find option" {
+  sp_dir
+  mkdir "$SPD/-x"; : > "$SPD/-x/memokit-5-x"; sp_old "$SPD/-x/memokit-5-x" 9
+  run bash -c 'cd "$1" && "$2" -c ". \"\$0/lib/common.sh\"; . \"\$0/lib/temp.sh\"; mk_state_prune -x" "$3"' _ "$SPD" "$MK_BASH" "$HOOKS"
+  [ "$output" = "1" ]; [ ! -e "$SPD/-x/memokit-5-x" ]
+}

@@ -4,7 +4,7 @@ load helpers
 setup() {
   mk_project '{"version":1,"project":{"name":"Demo","tag":"DMO"},"language":"en","scratch":{"agentMaxMB":1}}'
   mk_temp_tree
-  TMPDIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mktmp.XXXXXX")"; export TMPDIR
+  TMPDIR="$(mktemp -d "${MK_FIXTMP}/mktmp.XXXXXX")"; export TMPDIR
   AT="$TROOT/agent.jsonl"
   NL=$'\n'
 }
@@ -136,7 +136,7 @@ sp_payload() { # $1 stop_hook_active (optional)
   run_hook check-subagent-scratch.sh "$(sp_payload)"; [ "$status" -eq 2 ]
   d="$(find "$TMPDIR" -maxdepth 1 -name '*subagent-scratch' | head -1)"
   [ -n "$d" ]
-  rm -rf "$d"; V="$(mktemp -d "${BATS_TMPDIR:-/tmp}/victim.XXXXXX")"; ln -s "$V" "$d"
+  rm -rf "$d"; V="$(mktemp -d "${MK_FIXTMP}/victim.XXXXXX")"; ln -s "$V" "$d"
   run_hook check-subagent-scratch.sh "$(sp_payload)"
   [ "$status" -eq 0 ]
   [ -z "$(ls -A "$V")" ]

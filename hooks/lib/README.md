@@ -15,6 +15,29 @@ same way. Callers run
 `mk_load_config` first (staleness reads `MK_SCRATCH_STALE_HOURS`), then
 `mk_temp_init "$PAYLOAD"`; the live measurements it relies on are recorded in
 its header.
+`transcript.sh` (0.8.1) is the one reader of Claude Code session transcripts
+(JSON Lines), sourced after `common.sh` by `check-context-budget.sh` (tail
+only, every Stop: `mk_tr_context_used FILE 500`), the handoff's
+`memokit-stats.sh` and `/memokit:learn` (whole file, once). Programs get the
+shared jq defs (`mk_tr_records`, `mk_tr_context`, `mk_tr_tool_uses`,
+`mk_tr_tool_results`, `mk_tr_hook_deny`) through `mk_tr_jq` / `mk_tr_jq_tail`:
+lines are parsed one by one so a half-written last line is dropped, only
+objects are records, and whole-file readers keep `reduce` state so memory
+does not grow with the file. `mk_tr_locate` finds this session's transcript.
+Its header records the measured record shapes (split assistant records that
+repeat one usage, tool_use/tool_result blocks, the two hook-deny forms).
+`integrity.sh` (0.8.1) is the runtime integrity check, sourced after
+`common.sh` by `check-integrity.sh` (PreToolUse on every tool; Post,
+PostToolUseFailure and SubagentStop for subagents), `record-permission.sh`
+(PermissionRequest; records suggested allow rules, never decides) and
+`inject-rules.sh` (the one-time prompt notices). Pre writes a record (time,
+copy of small settings files, one digest line per protected file:
+`crc:size:mode:inode:ctime`) under the session's temp prefix, careful-state by
+name; Post and SubagentStop compare. A change leaves a marker the subagent
+block, the one-time main-session deny and the prompt notice each consume.
+It restores nothing. The header lists every state file and the plugin scope
+rules (`--plugin-dir` project exemption); `budget.sh` arms it with
+`MK_BUDGET_EVENT` so a timeout on Post is a reported change.
 `worktrees.sh` (leftover worktrees under `.claude/worktrees/` and `mk/*`
 branches) is sourced after `common.sh` by `session-start.sh` (`mk_wt_count`)
 and the sweep CLI (`mk_wt_list`); it is read-only and documents its statuses
@@ -63,8 +86,19 @@ dies half way into `unparsed`) and loads `remote.sh` itself when the caller has
 not; if that fails it prints `unparsed` (fail closed).
 Limitations: the subagent config gate (`guard-subagent-authority.sh`: the
 `.claude/memokit.json` allowlist, the hooks-path and window-request rules) is
-lexical; a tamper-proof session-start snapshot of the config is planned for
-0.8.1. Not seen: recursive tools run from the root (`find . -name '*.json'
+lexical. Subagent hooks judge by a session-start copy of the config (a change
+shows one notice; `/clear` or a new session adopts it), which is one more
+layer, not a tamper-proof one: it is a same-user file in the temp dir. A
+runtime check of the protected files (`integrity.sh`, above) reports what
+the text check misses, after the call. The
+settings-file gate has its own residual classes: paths assembled from pieces
+at run time, link makers other than `ln`, `cp -s` and `symlink` in the same
+command (archive extraction), copies of `session-start.sh` under another
+name or behind a bare variable (`bash $S`; the session-start rule reads the
+last path component of each word, a glob or expansion included, and never
+the filesystem), and interpreter writes to comma-named links. The guard
+runs with `set -f`; a glob command word or cd target is expanded on its own.
+Not seen: recursive tools run from the root (`find . -name '*.json'
 -exec sed -i ...`, `grep -rl ... | xargs sed -i`, `chmod -R a-w .`),
 parameter-default spellings (`.${X:-c}laude`), and `cd -` / `cd ~-` (the
 previous directory is not tracked). Bounds (`MK_GS_MAX_*`, guard header):
@@ -123,6 +157,22 @@ is resolved against the payload `cwd`, must be a file under the configured
 runbooks directory whose hash the window holds, and its invocation must be
 the only segment of the command (another segment could rewrite the file
 first).
+
+The change-window and pending-approval state files (`careful-window-*`,
+`careful-pending-*`, in the temp dir) are plain text the user's own shell can
+write. `careful.sh` limits what a hand-written file buys: an expiry later
+than a writer could have set (window: now + 240 min; pending line and
+request record: now + `MK_CF_TTL`) is malformed on read (the file is
+removed), and a command that names a state path literally, or writes to a
+computed `memokit-`/`careful-` word while naming a temp location, is
+`careful-state`, never approvable (a computed write without a temp location
+is `careful-state-glob`, approvable with a code). The markitdown cache
+(`careful-convert`, a directory; `convert-read.sh`) is in the same family:
+named in a Bash command it is `careful-state`, and a subagent file-tool
+write anywhere below it is denied (`guard-subagent-authority.sh`).
+Considered and rejected: HMAC on state files. A secret that hooks can read
+is readable by the model's own Bash under the same user, so a keyed hash
+adds no barrier against the only attacker in this model.
 
 Every hook in this plugin starts with one of the two canonical preambles
 below, copied verbatim (only `<hook-name>` changes). This keeps the gate

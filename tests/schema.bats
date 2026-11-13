@@ -7,7 +7,7 @@ load helpers
 }
 @test "schema lists exactly the known keys" {
   run jq -r '.properties | keys | join(",")' "$MK_REPO/schema/memokit.schema.json"
-  [ "$output" = '$schema,careful,contextBudget,disk,graph,guardedDirs,hints,language,parallel,project,remote,review,scratch,sessionStart,stateStale,version' ]
+  [ "$output" = '$schema,careful,contextBudget,convert,disk,graph,guardedDirs,hints,language,parallel,project,remote,review,scratch,sessionStart,stateStale,version' ]
 }
 @test "example enables the code graph" {
   jq -e '.graph.root == "src"' "$MK_REPO/examples/memokit.json"
@@ -68,4 +68,20 @@ cfg_err() {
   cfg_err '{"version":1,"project":{"name":"D","tag":"DMO"},"remote":{"hosts":["prod.example.com","*"],"windowMinutes":45}}'
   [ -z "$output" ]
   jq -e '.properties.remote.properties.hosts.items.pattern == "^\\S+$"' "$MK_REPO/schema/memokit.schema.json"
+}
+@test "0.8.1: parallel.auto is a boolean defaulting to false" {
+  jq -e '.properties.parallel.properties.auto | .type == "boolean" and .default == false' "$MK_REPO/schema/memokit.schema.json"
+}
+@test "schema and example: review.validate high/always/never, default high" {
+  jq -e '.properties.review.properties.validate | (.enum == ["high","always","never"]) and (.default == "high")' "$MK_REPO/schema/memokit.schema.json"
+  jq -e '.review.validate == "high"' "$MK_REPO/examples/memokit.json"
+}
+@test "0.8.1: hints.builtin enum lists context7 and the example enables it" {
+  jq -e '.properties.hints.properties.builtin.items.enum | index("context7") != null' "$MK_REPO/schema/memokit.schema.json"
+  jq -e '.hints.builtin | index("context7") != null' "$MK_REPO/examples/memokit.json"
+}
+@test "0.8.1: convert.markitdown is a boolean defaulting to false; the example leaves it off" {
+  jq -e '.properties.convert | .additionalProperties == false
+    and (.properties.markitdown | .type == "boolean" and .default == false)' "$MK_REPO/schema/memokit.schema.json"
+  jq -e '.convert.markitdown == false' "$MK_REPO/examples/memokit.json"
 }

@@ -2,7 +2,7 @@
 load helpers
 
 transcript() { # $1 total tokens
-  T="$(mktemp "${BATS_TMPDIR:-/tmp}/tr.XXXXXX")"
+  T="$(mktemp "${MK_FIXTMP}/tr.XXXXXX")"
   printf '{"message":{"usage":{"input_tokens":1000,"cache_read_input_tokens":%s,"cache_creation_input_tokens":0}}}\n' "$(( $1 - 1000 ))" > "$T"
   printf '{"message":{"usage":' >> "$T"   # half-written last line must be tolerated
 }
@@ -37,9 +37,32 @@ stop_payload() { jq -nc --arg t "$T" --arg s "${1:-s1}" '{transcript_path:$t,ses
   mk_project
   run_hook check-context-budget.sh "$(stop_payload same)"; [ -n "$output" ]
 }
+@test "output is exactly the CB_AUTONOMOUS message in Stop JSON (unchanged by the transcript.sh move)" {
+  mk_project; transcript 350999
+  run_hook check-context-budget.sh "$(stop_payload ex1)"
+  . "$HOOKS/messages/tr.sh"
+  tpl="${MK_T_CB_AUTONOMOUS//@TAG@/DMO}"
+  # shellcheck disable=SC2059
+  want="$(jq -n --arg m "$(printf "$tpl" 350 300)" '{hookSpecificOutput:{hookEventName:"Stop",additionalContext:$m}}')"
+  [ "$output" = "$want" ]
+}
+@test "only the tail is read: a usage record more than 500 lines from the end is not seen" {
+  mk_project; T="$(mktemp "${MK_FIXTMP}/tr.XXXXXX")"
+  printf '{"message":{"usage":{"input_tokens":350000}}}\n' > "$T"
+  awk 'BEGIN { for (i = 0; i < 500; i++) print "{\"type\":\"user\",\"message\":{\"content\":\"x\"}}" }' >> "$T"
+  run_hook check-context-budget.sh "$(stop_payload tail1)"; [ -z "$output" ]
+  printf '{"message":{"usage":{"input_tokens":350000}}}\n' >> "$T"
+  run_hook check-context-budget.sh "$(stop_payload tail1)"; [ -n "$output" ]
+}
+@test "a non-object line or a string message in the tail no longer silences the warning" {
+  mk_project; transcript 350000
+  printf '\n42\n{"message":"plain"}\n' >> "$T"
+  run_hook check-context-budget.sh "$(stop_payload nobj)"
+  ctx | grep -qF '~350k'
+}
 @test "session_id with ../ is sanitized before it becomes a marker path" {
   mk_project; transcript 350000
-  export TMPDIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mktmp.XXXXXX")"
+  export TMPDIR="$(mktemp -d "${MK_FIXTMP}/mktmp.XXXXXX")"
   mkdir -p "$TMPDIR/sub"
   run_hook check-context-budget.sh "$(stop_payload '../x')"; [ -n "$output" ]
   run_hook check-context-budget.sh "$(stop_payload '../x')"; [ -z "$output" ]   # once per band: the marker was written

@@ -12,8 +12,8 @@ recipe() {
 }
 
 setup() {
-  REPO="$(mktemp -d "${BATS_TMPDIR:-/tmp}/cr-repo.XXXXXX")"
-  DEST="$(mktemp -d "${BATS_TMPDIR:-/tmp}/cr-dest.XXXXXX")"
+  REPO="$(mktemp -d "${MK_FIXTMP}/cr-repo.XXXXXX")"
+  DEST="$(mktemp -d "${MK_FIXTMP}/cr-dest.XXXXXX")"
   git -C "$REPO" init -q
   mkdir -p "$REPO/src" "$REPO/lib" "$REPO/other" "$REPO/bin"
   printf 'a' > "$REPO/src/tracked.txt"

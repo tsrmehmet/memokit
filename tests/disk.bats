@@ -3,7 +3,7 @@ load helpers
 
 setup() {
   mk_project
-  export TMPDIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkdisk.XXXXXX")"
+  export TMPDIR="$(mktemp -d "${MK_FIXTMP}/mkdisk.XXXXXX")"
   unset MEMOKIT_DISK_OFF
   GB=1048576
 }
@@ -162,7 +162,7 @@ marker() { ls "$TMPDIR"/memokit-*-"$1" 2>/dev/null | head -1; }
 
 @test "silent Post path does not run du" {
   mk_temp_tree
-  shim="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkshim.XXXXXX")"
+  shim="$(mktemp -d "${MK_FIXTMP}/mkshim.XXXXXX")"
   printf '#!/bin/sh\necho called >> "%s/du.log"\nexec /usr/bin/du "$@"\n' "$shim" > "$shim/du"
   chmod +x "$shim/du"
   p() { jq -nc --arg e "$1" --arg t "$TT_TDIR/$TT_SID.jsonl" --arg s "$TT_SID" --arg cwd "$PROJ" '{hook_event_name:$e,session_id:$s,transcript_path:$t,tool_use_id:"tq",tool_input:{command:"x"},cwd:$cwd}'; }
@@ -202,7 +202,7 @@ marker() { ls "$TMPDIR"/memokit-*-"$1" 2>/dev/null | head -1; }
 
 @test "free space is measured on the project root AND the session temp root" {
   mk_temp_tree
-  shim="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkdfshim.XXXXXX")"
+  shim="$(mktemp -d "${MK_FIXTMP}/mkdfshim.XXXXXX")"
   # Fake df -Pk: the temp root has 5 GB available, anything else 500 GB.
   cat > "$shim/df" <<SH
 #!/bin/sh

@@ -45,7 +45,7 @@ bgp() { jq -nc --arg t "$1" --arg id "${2:-b1}" '{hook_event_name:"SubagentStop"
 }
 @test "agent_id with ../ is sanitized before it becomes a counter path" {
   mk_project; T="$(mktemp)"; tr_line "Command running in background with ID: b1. x" > "$T"
-  export TMPDIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mktmp.XXXXXX")"
+  export TMPDIR="$(mktemp -d "${MK_FIXTMP}/mktmp.XXXXXX")"
   p="$(jq -nc --arg t "$T" '{hook_event_name:"SubagentStop",agent_id:"../x",agent_transcript_path:$t,background_tasks:[{id:"b1",type:"bash",status:"running",command:"dotnet test"}]}')"
   run_hook check-subagent-background.sh "$p"; [ "$status" -eq 2 ]
   [ ! -e "$TMPDIR/x" ]

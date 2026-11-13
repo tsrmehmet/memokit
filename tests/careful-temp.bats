@@ -57,7 +57,7 @@ setup() {
 
 @test "temp rm: the /tmp spelling of a /private/tmp temp root" {
   # A fixture of our own directly under /tmp (never under claude-<uid>).
-  BATS_TMPDIR=/tmp mk_temp_tree
+  MK_FIXTMP=/tmp mk_temp_tree
   mkdir -p "$TT_SP/rv10a"
   case "$TT_SP" in
     /private/tmp/*) t="/tmp/${TT_SP#/private/tmp/}" ;;

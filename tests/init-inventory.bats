@@ -120,7 +120,7 @@ src() { printf '%s' "$output" | jq -e --arg p "$1" ".sources[] | select(.path ==
 }
 
 @test "inventory: outside git both flags are false" {
-  PROJ="$(mktemp -d "${BATS_TMPDIR:-/tmp}/nogit.XXXXXX")"
+  PROJ="$(mktemp -d "${MK_FIXTMP}/nogit.XXXXXX")"
   put CLAUDE.md
   inv
   src CLAUDE.md '.tracked == false and .ignored == false'
@@ -164,7 +164,7 @@ src() { printf '%s' "$output" | jq -e --arg p "$1" ".sources[] | select(.path ==
   mk_project none
   put CLAUDE.md; put .cursor/rules/a.mdc $'---\nglobs: a\n---\n'
   before="$(git -C "$PROJ" status --porcelain)"
-  stamp="$(mktemp "${BATS_TMPDIR:-/tmp}/stamp.XXXXXX")"
+  stamp="$(mktemp "${MK_FIXTMP}/stamp.XXXXXX")"
   inv
   [ -z "$(find "$PROJ" -newer "$stamp")" ]
   [ "$(git -C "$PROJ" status --porcelain)" = "$before" ]

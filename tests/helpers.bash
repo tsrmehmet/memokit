@@ -7,13 +7,34 @@ MK_BASH="${MK_BASH:-/bin/bash}"
 # ~/.claude/settings.json, inherited by Claude Code's shell) must not leak in.
 for _v in $(env | sed -n 's/^\(MEMOKIT_[A-Z_]*\)=.*/\1/p'); do unset "$_v"; done
 unset _v
+# Run from a Claude Code subagent shell, the suite would inherit
+# CLAUDE_CODE_CHILD_SESSION=1 and session-start.sh would skip the config
+# snapshot; tests that need it set it themselves.
+unset CLAUDE_CODE_CHILD_SESSION
 # Session-start auto-clean (0.6.1) starts detached jobs; tests that exercise
 # it unset this and set MEMOKIT_AUTOCLEAN_SYNC=1.
 export MEMOKIT_AUTOCLEAN_OFF=1
+# Hooks write state to ${TMPDIR}/memokit-*. Capture the real temp dir once (a
+# second `load helpers` must not overwrite it), then give every test a private
+# TMPDIR. bats re-sources the file inside each test's own process, where
+# BATS_TEST_TMPDIR already exists (cleaned by bats), so this works whether or
+# not a file defines its own setup(); BATS_FILE_TMPDIR is the fallback.
+: "${MK_REAL_TMPDIR:=${TMPDIR:-/tmp}}"
+export MK_REAL_TMPDIR
+if [ -n "${BATS_TEST_TMPDIR:-}" ]; then
+  export TMPDIR="$BATS_TEST_TMPDIR"
+elif [ -n "${BATS_FILE_TMPDIR:-}" ]; then
+  export TMPDIR="$BATS_FILE_TMPDIR"
+fi
+# Fixture dirs (projects, fake homes, shims, ...) go to bats's per-file temp
+# dir: inside bats's run dir, which bats removes when the run ends, and
+# outside the per-test TMPDIR the hooks write their state to. Never directly
+# under BATS_TMPDIR, the real temp dir (repo-hygiene.bats checks).
+MK_FIXTMP="${BATS_FILE_TMPDIR:-${BATS_TMPDIR:-/tmp}}"
 DEFAULT_CONFIG='{"version":1,"project":{"name":"Demo","tag":"DMO"},"language":"tr","guardedDirs":["src","tests"]}'
 
 mk_project() {
-  PROJ="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkproj.XXXXXX")"
+  PROJ="$(mktemp -d "${MK_FIXTMP}/mkproj.XXXXXX")"
   PROJ="$(cd "$PROJ" && pwd)"
   mkdir -p "$PROJ/src" "$PROJ/tests" "$PROJ/docs" "$PROJ/.claude"
   printf '# STATE\nSıradaki adım: demo\n' > "$PROJ/docs/STATE.md"
@@ -64,7 +85,7 @@ lacks() { if printf '%s' "$1" | grep -qF -- "$2"; then echo "unexpected: $2"; re
 # except the ones named as arguments.
 path_without() {
   local bin c skip x
-  bin="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkbin.XXXXXX")"
+  bin="$(mktemp -d "${MK_FIXTMP}/mkbin.XXXXXX")"
   for c in bash sh cat tr readlink dirname basename git cksum cut head tail wc sed grep date mktemp stat ls pwd env printf mkdir rm jq sort uniq awk find paste; do
     skip=0
     for x in "$@"; do [ "$c" = "$x" ] && skip=1; done
@@ -81,7 +102,7 @@ path_without() {
 # $TROOT/claude-<uid>) plus TT_* paths in their physical (cd -P) form and
 # TT_PAYLOAD, a hook payload pointing at that session.
 mk_temp_tree() {
-  TROOT_LOGICAL="$(mktemp -d "${BATS_TMPDIR:-/tmp}/troot.XXXXXX")"
+  TROOT_LOGICAL="$(mktemp -d "${MK_FIXTMP}/troot.XXXXXX")"
   TROOT="$(cd -P "$TROOT_LOGICAL" && pwd -P)"
   TT_UID="$(id -u)"
   TT_SLUG="${1:--fix-proj}"
@@ -114,7 +135,7 @@ legacy_project() {
   printf '%s' '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR/.claude/hooks/check-state-stale.sh\""}]}]}}' > "$PROJ/.claude/settings.json"
   git -C "$PROJ" -c user.email=t@t -c user.name=t add -A; git -C "$PROJ" -c user.email=t@t -c user.name=t commit -qm legacy
   # extract-legacy compares vendored skills against $HOME/.claude/skills: never the real one.
-  export HOME="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkhome.XXXXXX")"
+  export HOME="$(mktemp -d "${MK_FIXTMP}/mkhome.XXXXXX")"
 }
 
 # Worktree fixtures (worktrees.bats, careful-cleanup.bats): a throwaway repo
@@ -123,7 +144,7 @@ g() { git -C "$R" -c user.email=t@t -c user.name=t "$@"; }
 gw() { local d="$1"; shift; git -C "$d" -c user.email=t@t -c user.name=t "$@"; }
 
 wt_repo() {
-  R="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkwt.XXXXXX")"
+  R="$(mktemp -d "${MK_FIXTMP}/mkwt.XXXXXX")"
   R="$(cd -P "$R" && pwd -P)"
   git -C "$R" init -q
   g symbolic-ref HEAD refs/heads/main

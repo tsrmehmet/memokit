@@ -1,7 +1,7 @@
 # Validates .claude/memokit.json and emits shell assignments (quoted with @sh).
 def err($m): "MK_CONFIG_ERR=\($m | @sh)";
-def known: ["$schema","version","project","language","guardedDirs","contextBudget","stateStale","sessionStart","hints","graph","careful","remote","scratch","disk","parallel","review"];
-def builtin_all: ["debugging","decision","review","handoff","resume","graphify"];
+def known: ["$schema","version","project","language","guardedDirs","contextBudget","stateStale","sessionStart","hints","graph","careful","remote","scratch","disk","parallel","review","convert"];
+def builtin_all: ["debugging","decision","review","handoff","resume","graphify","context7"];
 def dir_ok: type == "string"
   and test("^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$")
   and (test("(^|/)\\.\\.?(/|$)") | not)
@@ -37,6 +37,7 @@ elif has("remote") and ((.remote | type) != "object"
     or ((.remote.deployBranches // []) | (type != "array") or any(.[]; (type != "string") or (test("^[A-Za-z0-9._/-]+$") | not)))
     or ((.remote.hosts // []) | (type != "array") or any(.[]; (type != "string") or (test("^\\S+$") | not)))
     or ((.remote.readOnlyFirstWords // []) | (type != "array") or any(.[]; (type != "string") or (test("^[A-Za-z0-9_.+]+(-[A-Za-z0-9_.+]+)?$") | not)))
+    # 240: MK_CF_WINDOW_MAX_MIN in careful.sh
     or ((.remote.windowMinutes // 30) | (type != "number") or (. != floor) or (. < 1) or (. > 240))
     or ((.remote.runbooksDir // ".claude/memokit/runbooks") | path_ok | not)
     or ((.remote.log // "docs/DEPLOYS.md") | path_ok | not)) then err("remote")
@@ -49,9 +50,14 @@ elif has("disk") and ((.disk | type) != "object"
     or ((.disk.dropWarnGB // 10) | (type != "number") or (. < 1))) then err("disk")
 elif has("parallel") and ((.parallel | type) != "object"
     or ((.parallel.maxCoders // 3) | (type != "number") or (. < 1) or (floor != .))
-    or ((.parallel.maxReviewers // 3) | (type != "number") or (. < 1) or (floor != .))) then err("parallel")
+    or ((.parallel.maxReviewers // 3) | (type != "number") or (. < 1) or (floor != .))
+    or ((.parallel.auto // false) | type != "boolean")) then err("parallel")
 elif has("review") and ((.review | type) != "object"
-    or ((.review.model // "auto") | IN("auto","opus","sonnet") | not)) then err("review")
+    or ((.review.model // "auto") | IN("auto","opus","sonnet") | not)
+    or ((.review.validate // "high") | IN("high","always","never") | not)) then err("review")
+elif has("convert") and ((.convert | type) != "object"
+    or ((.convert | keys - ["markitdown"]) | length > 0)
+    or ((.convert.markitdown // false) | type != "boolean")) then err("convert")
 else
   [ "MK_CONFIG_ERR=''",
     "MK_NAME=\(.project.name | @sh)",
@@ -83,6 +89,7 @@ else
     "MK_PARALLEL_MAX_CODERS=\((.parallel.maxCoders // 3) | floor | tostring | @sh)",
     "MK_PARALLEL_MAX_REVIEWERS=\((.parallel.maxReviewers // 3) | floor | tostring | @sh)",
     "MK_REVIEW_MODEL=\((.review.model // "auto") | @sh)",
+    "MK_CONVERT_MARKITDOWN=\(if (.convert.markitdown // false) then "1" else "0" end | @sh)",
     "MK_CONFIG_WARN=\([keys[] | select(. as $k | known | index($k) | not)] | join(",") | @sh)"
   ] | join("\n")
 end

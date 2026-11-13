@@ -2,7 +2,7 @@
 load helpers
 # hooks/lib/worktrees.sh: leftover worktrees under .claude/worktrees/ and mk/*
 # branches without a worktree, classified against the current branch.
-# Every fixture is a throwaway repo under $BATS_TMPDIR.
+# Every fixture is a throwaway repo under $MK_FIXTMP (helpers.bash).
 
 # g, gw, wt_repo, wt_add, wt_commit and ledger live in helpers.bash (shared
 # with careful-cleanup.bats).
@@ -68,7 +68,7 @@ row_status() { row "$1" | cut -f2 | head -n1; }
 }
 @test "a checked-out mk/ branch outside .claude/worktrees is neither listed nor an orphan" {
   wt_repo
-  O="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkwto.XXXXXX")"; O="$(cd -P "$O" && pwd -P)"
+  O="$(mktemp -d "${MK_FIXTMP}/mkwto.XXXXXX")"; O="$(cd -P "$O" && pwd -P)"
   g worktree add -q "$O/elsewhere" -b mk/r1/x main
   wt_list "$R"
   echo "$output"
@@ -120,7 +120,7 @@ row_status() { row "$1" | cut -f2 | head -n1; }
   rm -rf "$R"
 }
 @test "a non-git directory is silent with exit 0" {
-  d="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkng.XXXXXX")"
+  d="$(mktemp -d "${MK_FIXTMP}/mkng.XXXXXX")"
   wt_list "$d"
   [ "$status" -eq 0 ]
   [ "$output" = "rc=0" ]
@@ -218,7 +218,7 @@ row_status() { row "$1" | cut -f2 | head -n1; }
 @test "mk_wt_count: count, total KB and unmeasured count, without status/rev-list/log" {
   wt_repo; wt_add mk-r1-a mk/r1/a; wt_add agent-b feature/b; g branch mk/r1/o
   printf 'x\n' >> "$W/agent-b/a.txt"
-  SHIM="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkshim.XXXXXX")"
+  SHIM="$(mktemp -d "${MK_FIXTMP}/mkshim.XXXXXX")"
   real="$(command -v git)"
   printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/log"\nexec "%s" "$@"\n' "$SHIM" "$real" > "$SHIM/git"
   chmod +x "$SHIM/git"
@@ -298,7 +298,7 @@ wt_proj() { wt_repo; mkdir -p "$R/.claude"; printf '%s' "$DEFAULT_CONFIG" > "$R/
   rm -rf "$R"
 }
 @test "memokit-temp.sh worktrees: a space in the repo path does not make a row manual" {
-  P="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mk sp.XXXXXX")"; P="$(cd -P "$P" && pwd -P)"
+  P="$(mktemp -d "${MK_FIXTMP}/mk sp.XXXXXX")"; P="$(cd -P "$P" && pwd -P)"
   R="$P/repo dir"; mkdir -p "$R"
   git -C "$R" init -q; g symbolic-ref HEAD refs/heads/main
   printf '.claude/worktrees/\n' > "$R/.gitignore"; g add -A; g commit -qm init
@@ -404,7 +404,7 @@ wt_proj() { wt_repo; mkdir -p "$R/.claude"; printf '%s' "$DEFAULT_CONFIG" > "$R/
 # --- lanes made from a sibling worktree (final review I2) ---------------------
 @test "lanes under a sibling worktree's .claude/worktrees are listed; its ledger marks its active run" {
   wt_repo
-  O="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkwts.XXXXXX")"; O="$(cd -P "$O" && pwd -P)"
+  O="$(mktemp -d "${MK_FIXTMP}/mkwts.XXXXXX")"; O="$(cd -P "$O" && pwd -P)"
   g worktree add -q "$O/p-feat" -b feat main
   S="$O/p-feat/.claude/worktrees"
   gw "$O/p-feat" worktree add -q "$S/mk-r1-a" -b mk/r1/a feat

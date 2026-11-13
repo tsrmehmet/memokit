@@ -80,7 +80,7 @@ load helpers
   [ "$(decision)" = "deny" ]
 }
 @test "root with space and uppercase" {
-  base="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mk.XXXXXX")"
+  base="$(mktemp -d "${MK_FIXTMP}/mk.XXXXXX")"
   mkdir -p "$base/My Project"
   export CLAUDE_PROJECT_DIR="$base/My Project"; PROJ="$CLAUDE_PROJECT_DIR"
   mkdir -p "$PROJ/src" "$PROJ/.claude"; git -C "$PROJ" init -q
@@ -97,7 +97,7 @@ load helpers
 @test "symlink outside the project into src/sub is denied (inode-identity walk)" {
   mk_project
   mkdir -p "$PROJ/src/sub"
-  outside="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkoutside.XXXXXX")"
+  outside="$(mktemp -d "${MK_FIXTMP}/mkoutside.XXXXXX")"
   ln -s "$PROJ/src/sub" "$outside/link"
   run_hook guard-edit.sh "$(write_payload "$outside/link/pwn.cs")"
   [ "$status" -eq 0 ]
@@ -166,7 +166,7 @@ wt_bash_payload() {
 }
 @test "worktree outside the root: main-session write to src is denied" {
   mk_project
-  base="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkwt.XXXXXX")"
+  base="$(mktemp -d "${MK_FIXTMP}/mkwt.XXXXXX")"
   mk_worktree "$base/wt"
   run_hook guard-edit.sh "$(wt_write_payload "$WT/src/a.cs" "" "$WT")"
   [ "$status" -eq 0 ]
@@ -222,7 +222,7 @@ wt_bash_payload() {
   [ "$status" -eq 0 ]; [ -z "$output" ]
 }
 @test "non-git directory without config stays silent" {
-  d="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mknogit.XXXXXX")"
+  d="$(mktemp -d "${MK_FIXTMP}/mknogit.XXXXXX")"
   mkdir -p "$d/src"
   export CLAUDE_PROJECT_DIR="$d/src"; PROJ="$d"
   run_hook guard-edit.sh "$(write_payload "$d/src/a.cs")"

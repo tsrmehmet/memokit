@@ -102,7 +102,8 @@
               "review",
               "handoff",
               "resume",
-              "graphify"
+              "graphify",
+              "context7"
             ]
           }
         },
@@ -201,7 +202,8 @@
       "description": "Limits for parallel wave execution.",
       "properties": {
         "maxCoders": { "type": "integer", "minimum": 1, "default": 3, "description": "Maximum coder subagents running at once." },
-        "maxReviewers": { "type": "integer", "minimum": 1, "default": 3, "description": "Maximum reviewer subagents running at once." }
+        "maxReviewers": { "type": "integer", "minimum": 1, "default": 3, "description": "Maximum reviewer subagents running at once." },
+        "auto": { "type": "boolean", "default": false, "description": "When true, /memokit:resume announces and starts /memokit:parallel itself if two or more tasks remain, instead of offering it." }
       }
     },
     "review": {
@@ -209,7 +211,16 @@
       "additionalProperties": false,
       "description": "Reviewer settings.",
       "properties": {
-        "model": { "enum": ["auto", "opus", "sonnet"], "default": "auto", "description": "Reviewer model: auto picks by risk." }
+        "model": { "enum": ["auto", "opus", "sonnet"], "default": "auto", "description": "Reviewer model: auto picks by risk." },
+        "validate": { "enum": ["high", "always", "never"], "default": "high", "description": "When a REJECT review is checked by a second reviewer that tries to refute each finding: for high-risk tasks only, for every task, or never." }
+      }
+    },
+    "convert": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "File conversion on Read.",
+      "properties": {
+        "markitdown": { "type": "boolean", "default": false, "description": "When true and the markitdown CLI is on PATH, a Read of a PDF, DOCX, PPTX or XLSX file without a pages argument is redirected to a cached Markdown conversion (local, no LLM). Scanned PDFs and failed conversions are read as before." }
       }
     },
     "careful": {

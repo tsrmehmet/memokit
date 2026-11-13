@@ -11,14 +11,15 @@
     "healthScript": "scripts/knowledge-health.sh"
   },
   "hints": {
-    "builtin": ["debugging", "decision", "review", "handoff", "resume", "graphify"],
+    "builtin": ["debugging", "decision", "review", "handoff", "resume", "graphify", "context7"],
     "custom": [ { "match": "mockup|react|tailwind", "text": "Frontend work → frontend-design skill." } ]
   },
   "graph": { "root": "src", "maxCommitsBehind": 20 },
   "scratch": { "agentMaxMB": 1024, "staleAfterHours": 24, "reportMinMB": 500 },
   "disk": { "minFreeGB": 30, "dropWarnGB": 10 },
-  "parallel": { "maxCoders": 3, "maxReviewers": 3 },
-  "review": { "model": "auto" },
+  "parallel": { "maxCoders": 3, "maxReviewers": 3, "auto": false },
+  "review": { "model": "auto", "validate": "high" },
+  "convert": { "markitdown": false },
   "careful": {
     "patterns": [ { "match": "kubectl[[:space:]]+(apply|patch|scale)", "label": "kubectl-mutate", "target": "kube" } ]
   },

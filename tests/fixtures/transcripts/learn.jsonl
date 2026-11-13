@@ -1,0 +1,49 @@
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-01-01T00:00:00.000Z","sessionId":"s-learn"}
+{"type":"user","isSidechain":false,"uuid":"u01","sessionId":"s-learn","cwd":"/work/demo","message":{"role":"user","content":"demo prompt"}}
+{"type":"assistant","isSidechain":false,"uuid":"a01","message":{"id":"msg_1","role":"assistant","content":[{"type":"tool_use","id":"tu01","name":"Bash","input":{"command":"npm test","description":"demo"}}],"usage":{"input_tokens":2,"output_tokens":10}}}
+{"type":"user","isSidechain":false,"uuid":"u02","message":{"role":"user","content":[{"tool_use_id":"tu01","type":"tool_result","content":"Exit code 1\nFAIL demo.test.js\n2 failed","is_error":true}]}}
+{"type":"assistant","isSidechain":false,"uuid":"a02","message":{"id":"msg_2","role":"assistant","content":[{"type":"tool_use","id":"tu02","name":"Bash","input":{"command":"npm test","description":"demo"}}],"usage":{"input_tokens":2,"output_tokens":10}}}
+{"type":"user","isSidechain":false,"uuid":"u03","message":{"role":"user","content":[{"tool_use_id":"tu02","type":"tool_result","content":[{"type":"text","text":"Exit code 1\n\nFAIL other.test.js"}],"is_error":true}]}}
+{"type":"assistant","isSidechain":false,"uuid":"a03","message":{"id":"msg_3","role":"assistant","content":[{"type":"tool_use","id":"tu03","name":"Bash","input":{"command":"npm test","description":"demo"}}],"usage":{"input_tokens":2,"output_tokens":10}}}
+{"type":"user","isSidechain":false,"uuid":"u04","message":{"role":"user","content":[{"tool_use_id":"tu03","type":"tool_result","content":"ok","is_error":false}]}}
+{"type":"assistant","isSidechain":false,"uuid":"a04","message":{"id":"msg_4","role":"assistant","content":[{"type":"tool_use","id":"tu04","name":"Bash","input":{"command":"rm -rf build","description":"demo"}}],"usage":{"input_tokens":2,"output_tokens":10}}}
+{"type":"user","isSidechain":false,"uuid":"u05","toolDenialKind":"permission-rule","permissionDecision":{"decision":"reject","source":"hook","reasonType":"hook","reasonCode":"hook:PreToolUse"},"message":{"role":"user","content":[{"type":"tool_result","content":"PreToolUse:Bash hook error: [DMO-CAREFUL] rm-recursive: demo deny text.","is_error":true,"tool_use_id":"tu04"}]}}
+{"type":"assistant","isSidechain":false,"uuid":"a05","message":{"id":"msg_5","role":"assistant","content":[{"type":"tool_use","id":"tu05","name":"Bash","input":{"command":"rm -rf dist","description":"demo"}}],"usage":{"input_tokens":2,"output_tokens":10}}}
+{"type":"user","isSidechain":false,"uuid":"u06","message":{"role":"user","content":[{"type":"tool_result","content":"PreToolUse:Bash hook error: [DMO-CAREFUL] rm-recursive: demo deny text.","is_error":true,"tool_use_id":"tu05"}]}}
+{"type":"assistant","isSidechain":false,"uuid":"a06","message":{"id":"msg_6","role":"assistant","content":[{"type":"tool_use","id":"tu06","name":"Write","input":{"file_path":"/work/demo/src/a.js","content":"demo"}}],"usage":{"input_tokens":2,"output_tokens":10}}}
+{"type":"user","isSidechain":false,"uuid":"u07","message":{"role":"user","content":[{"type":"tool_result","content":"PreToolUse:Write hook error: Writing under src is blocked in the main session (WORKING-MODEL.md §1). Start a subagent.","is_error":true,"tool_use_id":"tu06"}]}}
+{"type":"assistant","isSidechain":false,"uuid":"a07","message":{"id":"msg_7","role":"assistant","content":[{"type":"tool_use","id":"tu07","name":"Read","input":{"file_path":"/work/demo/missing.txt"}}],"usage":{"input_tokens":2,"output_tokens":10}}}
+{"type":"user","isSidechain":false,"uuid":"u08","message":{"role":"user","content":[{"type":"tool_result","content":"File does not exist.","is_error":true,"tool_use_id":"tu07"}]}}
+{"type":"assistant","isSidechain":false,"uuid":"a08","message":{"id":"msg_8","role":"assistant","content":[{"type":"tool_use","id":"tu08","name":"Bash","input":{"command":"demo deploy","description":"demo"}}],"usage":{"input_tokens":2,"output_tokens":10}}}
+{"type":"user","isSidechain":false,"uuid":"u09","toolDenialKind":"automode-blocked","permissionDecision":{"decision":"reject","source":"config","reasonType":"classifier","reasonCode":"classifier:auto-mode"},"message":{"role":"user","content":[{"type":"tool_result","content":"Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Demo].","is_error":true,"tool_use_id":"tu08"}]}}
+{"type":"assistant","isSidechain":false,"uuid":"a09","message":{"id":"msg_9","role":"assistant","content":[{"type":"tool_use","id":"tu09","name":"Bash","input":{"command":"cat demo.log","description":"demo"}}],"usage":{"input_tokens":2,"output_tokens":10}}}
+{"type":"user","isSidechain":false,"uuid":"u10","message":{"role":"user","content":[{"type":"tool_result","content":"Exit code 1\nPreToolUse:Bash hook error: quoted inside a log, not a deny","is_error":true,"tool_use_id":"tu09"}]}}
+{"type":"assistant","isSidechain":false,"uuid":"a10","message":{"id":"msg_10","role":"assistant","content":[{"type":"tool_use","id":"tu10","name":"Edit","input":{"file_path":"/work/demo/b.txt","old_string":"a","new_string":"b"}}],"usage":{"input_tokens":2,"output_tokens":10}}}
+{"type":"user","isSidechain":false,"uuid":"u11","message":{"role":"user","content":[{"type":"tool_result","content":"The user doesn't want to proceed with this tool use. The tool use was rejected.","is_error":true,"tool_use_id":"tu10"}]}}
+{"type":"user","isSidechain":false,"uuid":"u12","message":{"role":"user","content":"hayır, önce testleri çalıştır"}}
+{"type":"assistant","isSidechain":false,"uuid":"a11","message":{"id":"msg_11","role":"assistant","content":[{"type":"thinking","thinking":"","signature":"x"}],"usage":{"input_tokens":2,"output_tokens":10}}}
+{"type":"assistant","isSidechain":false,"uuid":"a12","message":{"id":"msg_11","role":"assistant","content":[{"type":"text","text":"Haklısın, önce testleri çalıştırıyorum.\nikinci satır"}],"usage":{"input_tokens":2,"output_tokens":10}}}
+{"type":"user","isSidechain":false,"uuid":"u13","message":{"role":"user","content":[{"type":"text","text":"Don't push yet\nmore detail"}]}}
+{"type":"assistant","isSidechain":false,"uuid":"a13","message":{"id":"msg_12","role":"assistant","content":[{"type":"tool_use","id":"tu11","name":"Bash","input":{"command":"git status","description":"demo"}}],"usage":{"input_tokens":2,"output_tokens":10}}}
+{"type":"user","isSidechain":false,"uuid":"u14","message":{"role":"user","content":[{"tool_use_id":"tu11","type":"tool_result","content":"clean"}]}}
+{"type":"assistant","isSidechain":false,"uuid":"a14","message":{"id":"msg_13","role":"assistant","content":[{"type":"text","text":"OK, not pushing."}],"usage":{"input_tokens":2,"output_tokens":10}}}
+{"type":"user","isSidechain":false,"uuid":"u15","message":{"role":"user","content":"nothing else for now"}}
+{"type":"assistant","isSidechain":false,"uuid":"a15","message":{"id":"msg_14","role":"assistant","content":[{"type":"text","text":"fine"}],"usage":{"input_tokens":2,"output_tokens":10}}}
+{"type":"user","isSidechain":false,"uuid":"u16","message":{"role":"user","content":"durum nedir?"}}
+{"type":"assistant","isSidechain":false,"uuid":"a16","message":{"id":"msg_15","role":"assistant","content":[{"type":"text","text":"demo"}],"usage":{"input_tokens":2,"output_tokens":10}}}
+{"type":"user","isSidechain":false,"uuid":"u17","message":{"role":"user","content":"YANLIŞ dosya"}}
+{"type":"user","isSidechain":false,"uuid":"u18","message":{"role":"user","content":"stop"}}
+{"type":"assistant","isSidechain":false,"uuid":"a17","message":{"id":"msg_16","role":"assistant","content":[{"type":"text","text":"Stopped."}],"usage":{"input_tokens":2,"output_tokens":10}}}
+{"type":"user","isSidechain":false,"isMeta":true,"uuid":"u19","message":{"role":"user","content":"no meta caveat"}}
+{"type":"user","isSidechain":false,"uuid":"u20","message":{"role":"user","content":"<command-name>/clear</command-name>"}}
+{"type":"progress","uuid":"p01","data":{"type":"agent_progress","message":{"type":"user","message":{"role":"user","content":"wrong nested"}}}}
+{"type":"progress","uuid":"p02","data":{"type":"agent_progress","message":{"type":"assistant","message":{"id":"msg_sub","content":[{"type":"tool_use","id":"sub01","name":"Bash","input":{"command":"git status"}}]}}}}
+{"type":"user","isSidechain":true,"uuid":"u21","message":{"role":"user","content":"wrong sidechain"}}
+{"type":"assistant","isSidechain":false,"uuid":"a18","message":{"id":"msg_17","role":"assistant","content":[{"type":"tool_use","id":"tu12","name":"Bash","input":{"command":"git status","description":"demo"}},{"type":"tool_use","id":"tu13","name":"Bash","input":{"command":"git status","description":"demo"}}],"usage":{"input_tokens":2,"output_tokens":10}}}
+{"type":"user","isSidechain":false,"uuid":"u22","message":{"role":"user","content":[{"tool_use_id":"tu12","type":"tool_result","content":"clean"},{"tool_use_id":"tu13","type":"tool_result","content":"clean"}]}}
+not json at all {
+{"type":"assistant","isSidechain":false,"uuid":"a19","message":{"id":"msg_18","role":"assistant","content":[{"type":"tool_use","id":"tu14","name":"Bash","input":{"command":"ls","description":"demo"}}],"usage":{"input_tokens":2,"output_tokens":10}}}
+{"type":"user","isSidechain":false,"uuid":"u23","message":{"role":"user","content":[{"tool_use_id":"tu14","type":"tool_result","content":"a"}]}}
+{"type":"assistant","isSidechain":false,"uuid":"a20","message":{"id":"msg_19","role":"assistant","content":[{"type":"tool_use","id":"tu15","name":"Bash","input":{"command":"ls","description":"demo"}}],"usage":{"input_tokens":2,"output_tokens":10}}}
+{"type":"user","isSidechain":false,"uuid":"u24","message":{"role":"user","content":[{"tool_use_id":"tu15","type":"tool_result","content":"a"}]}}
+{"type":"user","isSidechain":false,"uuid":"u25","message":{"role":"user","content":"no trunc

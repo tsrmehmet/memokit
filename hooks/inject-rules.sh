@@ -15,15 +15,66 @@
 # is echoed (it matched [0-9a-f]{6} exactly). The plan's targets and expiry
 # in the window message come from memokit's own pending/window files (words
 # validated by the careful lib), not from the prompt. Only fixed strings from
-# this file (plus the sanitized graph-staleness gate text, see below) reach
-# additionalContext, so nothing else in a prompt can break the JSON or smuggle
-# instructions through it.
+# this file (plus the sanitized graph-staleness gate text, see below, and the
+# file paths of the integrity notice, from check-integrity.sh's own marker,
+# control characters dropped) reach additionalContext, so nothing else in a
+# prompt can break the JSON or smuggle instructions through it.
 set -u
 # shellcheck source-path=SCRIPTDIR source=lib/common.sh
 . "$(dirname "$0")/lib/common.sh"
 PAYLOAD="$(cat)"
 mk_resolve_root "$PAYLOAD"
-mk_active || exit 0
+# Config change notice (spec 4): once per change, from the session-start
+# snapshot. _ir_seen is the last announced cksum of the live file (or
+# "deleted"); both files are state written by the safe writer.
+_ir_snap="" ; _ir_seen="" ; _ir_ign="" ; _ir_iga="" ; _ir_igb=""
+if [ -n "$MK_ROOT" ]; then
+  _ir_snap="$(mk_config_snapshot_file "$PAYLOAD")"
+  _ir_b="${_ir_snap##*/}"
+  _ir_seen="${_ir_snap%/*}/${_ir_b%%careful-config-*}careful-config-seen-${_ir_b#*careful-config-}"
+  # The integrity notice markers (check-integrity.sh): the same session key
+  # under the root-independent name memokit-0-careful-integrity-KIND-<sid>.
+  _ir_ign="${_ir_snap%/*}/memokit-0-careful-integrity-notice-${_ir_b#*careful-config-}"
+  _ir_iga="${_ir_snap%/*}/memokit-0-careful-integrity-allow-${_ir_b#*careful-config-}"
+  _ir_igb="${_ir_snap%/*}/memokit-0-careful-integrity-broad-${_ir_b#*careful-config-}"
+  [ -f "$_ir_snap" ] && [ ! -L "$_ir_snap" ] || _ir_snap=""
+fi
+# _ir_ig -- the integrity notices (spec 8), once each: protected files
+# changed during a subagent tool call (IG_PROMPT_NOTICE), or permission rules
+# were added then (IG_ALLOW_NOTICE; broad ones IG_BROAD_NOTICE). The markers
+# hold paths and rules; they are shown by fixed labels and filtered rules
+# (lib/integrity.sh) and removed here. Prints nothing when there is none.
+_ir_ig_any() {
+  { [ -n "$_ir_ign" ] && [ -f "$_ir_ign" ]; } || { [ -n "$_ir_iga" ] && [ -f "$_ir_iga" ]; } ||
+    { [ -n "$_ir_igb" ] && [ -f "$_ir_igb" ]; }
+}
+_ir_ig() {
+  local l t=""
+  _ir_ig_any || return 0
+  # shellcheck source-path=SCRIPTDIR source=lib/integrity.sh
+  . "$MK_LIB_DIR/integrity.sh"
+  if l="$(mk_integrity_take "$_ir_ign")"; then t="$(mk_msg IG_PROMPT_NOTICE "$l")"; fi
+  if l="$(mk_integrity_take "$_ir_iga" rules)" && [ -n "$l" ]; then t="${t:+$t }$(mk_msg IG_ALLOW_NOTICE "$l")"; fi
+  if l="$(mk_integrity_take "$_ir_igb" rules)" && [ -n "$l" ]; then t="${t:+$t }$(mk_msg IG_BROAD_NOTICE "$l")"; fi
+  printf '%s' "$t"
+}
+if ! mk_active; then
+  [ -n "$_ir_snap" ] || _ir_ig_any || exit 0
+  _ir_t=""
+  [ -n "$_ir_snap" ] && MK_CONFIG="$_ir_snap"
+  MK_LANG="$(mk_lang_guess)"; mk_load_messages "$MK_LANG"
+  # Deleted mid-session: only when a snapshot proves it existed.
+  if [ -n "$_ir_snap" ] && [ "$(cat "$_ir_seen" 2>/dev/null)" != "deleted" ]; then
+    printf 'deleted\n' | _mk_state_write "$_ir_seen" 2>/dev/null || true
+    _ir_t="$(mk_msg IR_CONFIG_DELETED)"
+  fi
+  _ir_n="$(_ir_ig)"
+  [ -z "$_ir_n" ] || _ir_t="${_ir_t:+$_ir_t }$_ir_n"
+  if [ -n "$_ir_t" ]; then
+    jq -n --arg t "$_ir_t" '{hookSpecificOutput:{hookEventName:"UserPromptSubmit",additionalContext:$t}}'
+  fi
+  exit 0
+fi
 mk_debug_dump "inject-rules" "$PAYLOAD"
 
 # jq missing must not lose the base rule block entirely: the guard hooks deny
@@ -121,6 +172,17 @@ EOF
   fi
 fi
 TEXT="$(mk_msg IR_RULES_BASE "$DIRS")"
+if [ -n "$_ir_snap" ]; then
+  _ir_a="$(cksum < "$_ir_snap" 2>/dev/null)"; _ir_b="$(cksum < "$MK_CONFIG_LIVE" 2>/dev/null)"
+  if [ "$_ir_a" = "$_ir_b" ]; then
+    rm -f "$_ir_seen" 2>/dev/null
+  elif [ "$(cat "$_ir_seen" 2>/dev/null)" != "$_ir_b" ]; then
+    printf '%s\n' "$_ir_b" | _mk_state_write "$_ir_seen" 2>/dev/null || true
+    TEXT="${TEXT} $(mk_msg IR_CONFIG_CHANGED)"
+  fi
+fi
+_ir_n="$(_ir_ig)"
+[ -z "$_ir_n" ] || TEXT="${TEXT} ${_ir_n}"
 
 RULES_FILE="$MK_ROOT/.claude/memokit/rules.md"
 if [ -f "$RULES_FILE" ]; then
@@ -135,7 +197,14 @@ hint_on() { case " $MK_HINTS_BUILTIN " in *" $1 "*) return 0 ;; esac; return 1; 
 # reaching a caller that might merge stdout+stderr (this hook's own stdout,
 # read alone, is unaffected either way: the diagnostic never went there).
 # printf 2>/dev/null: grep -q may close the pipe early (EPIPE when SIGPIPE is ignored).
-matches() { printf '%s' "$prompt" 2>/dev/null | grep -qiE "$1" 2>/dev/null; }
+# First under LC_ALL=C: -i folds ASCII only, so an upper-case I still matches
+# i under tr_TR.UTF-8 (where GNU grep folds it to the dotless i); the Turkish
+# words of the patterns match as their UTF-8 bytes. Then, only on a miss, in
+# the user's locale, which folds Turkish upper-case letters (ÇALIŞMIYOR).
+matches() {
+  printf '%s' "$prompt" 2>/dev/null | LC_ALL=C grep -qiE "$1" 2>/dev/null ||
+    printf '%s' "$prompt" 2>/dev/null | grep -qiE "$1" 2>/dev/null
+}
 HINTS=""
 if [ -n "$prompt" ]; then
   hint_on debugging && matches 'bug|hata|çalışmıyor|calismiyor|patlıyor|patliyor|kırmızı|kirmizi|broken|crash|exception|regres|neden böyle|neden boyle|fails?|failing|flaky|triyaj|triage|red tests?|e2e' \
@@ -168,6 +237,15 @@ if [ -n "$prompt" ]; then
     && HINTS="${HINTS}$(mk_msg IR_HINT_HANDOFF)"
   hint_on resume && matches '(^|[^a-zA-Z])devam et|(^|[^a-zA-Z])resume|(^|[^a-zA-Z])continue' \
     && HINTS="${HINTS}$(mk_msg IR_HINT_RESUME)"
+  # context7 (spec 9): a library/framework/SDK/API version or docs question.
+  # One bounded regex (gaps of at most 60 characters), no per-position work.
+  # "api", "package", "npm" and "docs" pair too often in plain coding requests
+  # ("add api documentation comments", "the new package version", "api
+  # sürümü alanı"); only sdk/framework/library pair with a version word, and
+  # "sdk" also with a version number ("Stripe SDK v12", "Expo SDK 52") set
+  # off by a blank or "v" and followed by a boundary ("sdk2 folder": silent).
+  hint_on context7 && matches 'deprecat|breaking change|changelog|release notes|what changed in|what.s new in|ne değişti|ne degisti|(^|[^a-z])(sdk|framework|library|kütüphane|kutuphane).{0,60}(version|sürüm|surum)|(version|sürüm|surum).{0,60}(sdk|framework|library|kütüphane|kutuphane)|(upgrade|migrat|yükselt|yukselt)[^0-9]{0,40}(v[0-9]|version|sürüm)|(^|[^a-z])v[0-9]+.{0,20}(upgrade|migrat|yükselt|yukselt)|(^|[^a-z])(react|next(\.?js)?|vue|nuxt|angular|svelte|django|rails|laravel|prisma|tailwind|node(\.?js)?|typescript|expo) ?v?[0-9]+|(^|[^a-z])sdk( v?|v)[0-9]+([^0-9a-z]|$)' \
+    && HINTS="${HINTS}$(mk_msg IR_HINT_CONTEXT7)"
   # Project hints: match/text come from the project's own trusted config. A
   # match regex that grep -E rejects as invalid (e.g. an unbalanced "[") just
   # makes matches() return non-zero like any other non-match -- grep's own

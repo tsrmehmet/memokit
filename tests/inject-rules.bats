@@ -299,3 +299,116 @@ nothing_happened() {
   lacks "$(ctx)" 'CAREFUL'
   nothing_happened
 }
+
+# --- 0.8.1 (spec 4): config change / deletion notice ------------------------
+_snap() { # write the session snapshot like session-start does
+  run "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; mk_resolve_root '{}'; mk_config_snapshot_write \"\$1\"" _ "$(prompt_payload x)"
+  [ "$status" -eq 0 ]
+}
+@test "config notice: unchanged config, no notice" {
+  mk_project; _snap
+  run_hook inject-rules.sh "$(prompt_payload 'merhaba')"
+  lacks "$(ctx)" 'memokit.json'
+}
+@test "config notice: no snapshot, config present, no notice" {
+  mk_project
+  printf '%s' '{"version":1,"project":{"name":"D2","tag":"DMO"},"language":"en"}' > "$PROJ/.claude/memokit.json"
+  run_hook inject-rules.sh "$(prompt_payload 'merhaba')"
+  lacks "$(ctx)" 'memokit.json'
+}
+@test "config notice: changed announces once, again only after another change" {
+  mk_project; _snap
+  printf '%s' '{"version":1,"project":{"name":"D2","tag":"DMO"},"language":"en"}' > "$PROJ/.claude/memokit.json"
+  run_hook inject-rules.sh "$(prompt_payload 'merhaba')"
+  ctx | grep -qF 'memokit.json changed during this session: subagents keep the session-start version; /clear or a new session adopts it.'
+  run_hook inject-rules.sh "$(prompt_payload 'merhaba')"
+  lacks "$(ctx)" 'memokit.json'
+  printf '%s' '{"version":1,"project":{"name":"D3","tag":"DMO"},"language":"en"}' > "$PROJ/.claude/memokit.json"
+  run_hook inject-rules.sh "$(prompt_payload 'merhaba')"
+  ctx | grep -qF 'memokit.json changed during this session'
+}
+@test "config notice: deleted with snapshot announces once, valid json" {
+  mk_project; _snap
+  rm -f "$PROJ/.claude/memokit.json"
+  run_hook inject-rules.sh "$(prompt_payload 'merhaba')"
+  printf '%s' "$output" | jq -e . >/dev/null
+  ctx | grep -qF 'memokit.json bu oturum sırasında silindi: geri konana kadar alt ajan çağrıları reddedilir.'
+  run_hook inject-rules.sh "$(prompt_payload 'merhaba')"
+  [ -z "$output" ]
+}
+@test "config notice: deleted without snapshot stays silent" {
+  mk_project
+  rm -f "$PROJ/.claude/memokit.json"
+  run_hook inject-rules.sh "$(prompt_payload 'merhaba')"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+# 0.8.1 (spec 9): the builtin context7 hint.
+@test "context7 hint fires once on library, API and version questions (en and tr)" {
+  mk_project
+  local p n
+  for p in 'how do I use the React 19 useActionState hook' "what changed in Next.js 15" 'is this API deprecated' 'upgrade prisma to v6' \
+           "Next.js 15'te ne değişti" 'bu kütüphanenin son sürümünde ne var' 'bu API deprecated mı' "prisma'yı v6'ya yükselt" \
+           'where are the docs for this sdk version' 'is the Stripe SDK v12 API still supported' 'Expo SDK 52 nasıl kurulur'; do
+    run_hook inject-rules.sh "$(prompt_payload "$p")"
+    n="$(ctx | grep -o 'context7' | wc -l | tr -d ' ')"
+    [ "$n" = 1 ] || { echo "no single hint for: $p ($n)"; false; }
+  done
+}
+@test "hints match ASCII case-insensitively whatever the locale (an upper-case I under tr_TR.UTF-8)" {
+  mk_project
+  if locale -a 2>/dev/null | grep -qi '^tr_TR\.utf-\{0,1\}8$'; then
+    export LANG=tr_TR.UTF-8 LC_ALL=tr_TR.UTF-8
+  fi
+  local p
+  for p in 'WHICH LIBRARY VERSION ADDED THIS' 'IS THIS API DEPRECATED'; do
+    run_hook inject-rules.sh "$(prompt_payload "$p")"
+    ctx | grep -qF 'context7' || { echo "no context7 hint for: $p"; false; }
+  done
+  run_hook inject-rules.sh "$(prompt_payload 'THE BUILD IS BROKEN')"
+  ctx | grep -qF 'systematic-debugging' || { echo "no debugging hint: [$output]"; false; }
+  # GNU grep -i folds I to the dotless i under tr_TR (BSD grep does not, so
+  # the lines above pass on macOS either way): matches() runs grep under C
+  # first.
+  sed -n '/^matches() {$/,/^}$/p' "$HOOKS/inject-rules.sh" | sed -n 2p | grep -qF '| LC_ALL=C grep -qiE "$1"'
+}
+@test "hints still fold Turkish upper-case letters through the locale" {
+  mk_project
+  if locale -a 2>/dev/null | grep -qi '^tr_TR\.utf-\{0,1\}8$'; then
+    export LANG=tr_TR.UTF-8 LC_ALL=tr_TR.UTF-8
+  else
+    skip "no tr_TR.UTF-8 locale"
+  fi
+  run_hook inject-rules.sh "$(prompt_payload 'TESTLER ÇALIŞMIYOR')"
+  ctx | grep -qF 'systematic-debugging' || { echo "no debugging hint: [$output]"; false; }
+  run_hook inject-rules.sh "$(prompt_payload 'KÜTÜPHANE SÜRÜMÜ NEDİR')"
+  ctx | grep -qF 'context7' || { echo "no context7 hint: [$output]"; false; }
+}
+@test "context7 hint stays silent on plain coding requests" {
+  mk_project
+  local p
+  for p in 'rename the helper function' 'merhaba' 'bu fonksiyonu sadeleştir' 'add a button to the page' 'sunucuyu yeniden başlat' \
+           'add api documentation comments to this class' 'update the README with the new package version' 'api sürümü alanını ekle' 'add sdk2 folder to the build'; do
+    run_hook inject-rules.sh "$(prompt_payload "$p")"
+    lacks "$(ctx)" 'context7' || { echo "fired for: $p"; false; }
+  done
+}
+@test "context7 hint is off when hints.builtin omits it" {
+  mk_project '{"version":1,"project":{"name":"D","tag":"DMO"},"hints":{"builtin":["review"]}}'
+  run_hook inject-rules.sh "$(prompt_payload 'is this API deprecated')"
+  lacks "$(ctx)" 'context7'
+}
+@test "context7 hint: a 64 KiB prompt with the match near the end decides within 2 s of CPU" {
+  mk_project
+  if locale -a 2>/dev/null | grep -qi '^tr_TR\.utf-\{0,1\}8$'; then
+    export LANG=tr_TR.UTF-8 LC_ALL=tr_TR.UTF-8
+  fi
+  local f="$BATS_TEST_TMPDIR/big" t0 cpu
+  { awk 'BEGIN { for (i = 0; i < 6500; i++) printf "api sdk package v1 x\n" }'; printf 'is this deprecated'; } > "$f"
+  local pl; pl="$(jq -nc --rawfile p "$f" --arg cwd "$PROJ" '{prompt:$p,cwd:$cwd}')"
+  TIMEFORMAT='%U %S'
+  cpu="$( { time run_hook inject-rules.sh "$pl" >/dev/null; } 2>&1 )"
+  cpu="$(printf '%s' "$cpu" | awk '{printf "%d", ($1+$2)*1000}')"
+  echo "cpu ms: $cpu"
+  [ "$cpu" -lt 2000 ]
+}

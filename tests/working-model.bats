@@ -53,3 +53,15 @@ load helpers
     printf '%s' "$sec" | grep -qiF -- "$w" || { echo "$w"; false; }
   done
 }
+@test "0.8.1: §1 offers /memokit:parallel for two or more remaining tasks outside resume" {
+  sec="$(sed -n '/^## §1/,/^## §2/p' "$MK_REPO/WORKING-MODEL.md")"
+  for w in 'two or more remaining tasks' '/memokit:resume' '/memokit:parallel' 'offer'; do
+    printf '%s' "$sec" | grep -qF -- "$w" || { echo "$w"; false; }
+  done
+}
+@test "0.8.1 karpathy: §8 forbids speculative options and impossible-case handling" {
+  sec="$(sed -n '/^## §8/,/^## §9/p' "$MK_REPO/WORKING-MODEL.md")"
+  for w in 'unrequested option' 'configurability' 'cannot happen'; do
+    printf '%s' "$sec" | grep -qiF -- "$w" || { echo "$w"; false; }
+  done
+}

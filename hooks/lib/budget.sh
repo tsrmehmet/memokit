@@ -46,6 +46,15 @@ MK_BUDGET_WD=""
 MK_BUDGET_DENY_KEY=""
 MK_BUDGET_CRASH_KEY=""
 MK_BUDGET_MODE=strict
+# 0.8.1 (check-integrity.sh): MK_BUDGET_EVENT PreToolUse (default) prints a
+# deny; Quiet (SubagentStop) prints nothing; any other event (PostToolUse,
+# PostToolUseFailure) prints {"decision":"block","reason":...}.
+# MK_BUDGET_ON_STATIC names a function
+# run once, after the decision and before a static deny/block is printed
+# (fail-closed side effects; builtins only: the watchdog's tree kill may hit
+# a child it starts).
+MK_BUDGET_EVENT=PreToolUse
+MK_BUDGET_ON_STATIC=""
 
 # mk_budget_decided -- called right before the output of a deny and before
 # the exit of a pass (never earlier: a decision not yet chosen must stay
@@ -63,9 +72,10 @@ mk_budget_printed() {
   [ "${MEMOKIT_TEST_BURN:-}" = late ] && sleep 3.6
   return 0
 }
-# mk_budget_static_deny KEY -- the deny JSON for message KEY, printed with
-# printf (no jq): for the budget, crash and jq-failure paths. Marks the
-# decision (decided, printed).
+# mk_budget_static_deny KEY -- the deny JSON (a block for a PostToolUse
+# event, MK_BUDGET_EVENT) for message KEY, printed with printf (no jq): for
+# the budget, crash and jq-failure paths. Marks the decision (decided,
+# printed).
 mk_budget_static_deny() {
   local msg
   # The budget can fire before mk_load_config loaded the messages (a jq that
@@ -76,7 +86,13 @@ mk_budget_static_deny() {
   fi
   [ -n "$msg" ] || msg="memokit: denied ($1)"
   mk_budget_decided
-  printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "PreToolUse",\n    "permissionDecision": "deny",\n    "permissionDecisionReason": "%s"\n  }\n}\n' "$msg"
+  if [ -n "$MK_BUDGET_ON_STATIC" ]; then "$MK_BUDGET_ON_STATIC" 2>/dev/null; fi
+  case "$MK_BUDGET_EVENT" in
+    PreToolUse)
+      printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "PreToolUse",\n    "permissionDecision": "deny",\n    "permissionDecisionReason": "%s"\n  }\n}\n' "$msg" ;;
+    Quiet) ;;
+    *) printf '{\n  "decision": "block",\n  "reason": "%s"\n}\n' "$msg" ;;
+  esac
   mk_budget_printed
 }
 # mk_budget_deny_json JSON -- print an already built deny JSON once.

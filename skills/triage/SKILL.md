@@ -1,6 +1,6 @@
 ---
 name: triage
-description: Only in projects that have .claude/memokit.json — triage red and flaky tests. Mode A clusters many failures (CI run, test output) by signature and classifies each cluster as REGRESSION / FLAKY / ENV/DATA / UNKNOWN with evidence; mode B finds one cluster's root cause and hands memokit:coder a red-before-green fix slice. Use when the user says /triage, "triyaj", "flaky", "E2E kırmızı", or a pile of red tests blocks work.
+description: Only in projects that have .claude/memokit.json — triage red and flaky tests. Guidance mode (a question with no source) answers from existing evidence only, running no tests and writing no file. Mode A clusters many failures (CI run, test output) by signature and classifies each cluster as REGRESSION / FLAKY / ENV/DATA / UNKNOWN with evidence; mode B finds one cluster's root cause and hands memokit:coder a red-before-green fix slice. Use when the user says /triage, "triyaj", "flaky", "E2E kırmızı", or a pile of red tests blocks work.
 ---
 
 # Triage — red and flaky tests
@@ -13,7 +13,17 @@ Goal: turn a pile of red tests into a short, evidence-backed table, then fix one
 
 1. **Project overlay.** Read `.claude/memokit/triage.md` if it exists: test commands and filter syntax, rerun limits, the known-red list, log sources. It adds and narrows; it never loosens these steps.
 
-2. **Source.** `/memokit:triage <source>` — a test-output file, a CI run id (`gh run view <id> --log-failed`), or one test name. No source → ask for it. One test name → go to mode B.
+2. **Mode select.** Decide before choosing A or B.
+   - **With a source** — `/memokit:triage <source>`: a test-output file, a CI run id (`gh run view <id> --log-failed`), or one test name. A source present (even with a question) → mode A/B: one test name → mode B; otherwise mode A. Answer the question inside that mode. Modes A and B need an explicit source; never infer one from the question.
+   - **Guidance mode** — invoked with a question instead of a source (e.g. "is this flaky?", "what should I look at first?"): follow the Guidance mode section below and stop. Do not ask for a source first.
+   - **Nothing at all** — no source and no question: ask what to triage (a CI run id, a test-output file, one test name, or a question) and wait.
+
+## Guidance mode — a question, no source
+
+Answer from evidence already in the conversation or repo (test output shown earlier, files, logs, git history already present). "Already present" includes read-only look-ups: reading a file or log, `git log` / `git diff`, a search. Those are allowed — no tests, builds or writes. It runs no tests or builds, re-runs nothing, and writes no file (no `docs/triage/` file, no `docs/STATE.md` change).
+
+- Use the same classes as mode A (REGRESSION / FLAKY / ENV/DATA / UNKNOWN) and the same rule: no classification without evidence. Name the evidence you used; if there is none, answer UNKNOWN.
+- Finish by saying which source would let mode A or B confirm the answer (a CI run id, a test-output file, one test name, a re-run with a filter) and offer to run `/memokit:triage <that source>`.
 
 ## Mode A — bulk triage (no code is written)
 

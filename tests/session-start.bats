@@ -36,13 +36,13 @@ load helpers
   run_hook session-start.sh '{}'; ctx | grep -q 'HEALTH-OK'
 }
 mk_outside_script() {
-  out="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkout.XXXXXX")"; out="$(cd "$out" && pwd)"
+  out="$(mktemp -d "${MK_FIXTMP}/mkout.XXXXXX")"; out="$(cd "$out" && pwd)"
   printf '#!/bin/sh\ntouch "%s/RAN"\n' "$out" > "$out/kh.sh"; chmod +x "$out/kh.sh"
 }
 @test "health script outside the project root is not run" {
   mk_outside_script
   mk_project "{\"version\":1,\"project\":{\"name\":\"D\",\"tag\":\"DMO\"},\"language\":\"tr\",\"sessionStart\":{\"healthScript\":\"../$(basename "$out")/kh.sh\"}}"
-  # mk_project and the outside dir share BATS_TMPDIR, so ../<out> reaches it.
+  # mk_project and the outside dir share MK_FIXTMP, so ../<out> reaches it.
   [ "$(dirname "$PROJ")" = "$(dirname "$out")" ]
   run_hook session-start.sh '{}'
   [ ! -e "$out/RAN" ]
@@ -98,7 +98,7 @@ mk_outside_script() {
 lo_setup() {
   mk_project '{"version":1,"project":{"name":"Demo","tag":"DMO"},"language":"en","scratch":{"reportMinMB":1}}'
   mk_temp_tree
-  export TMPDIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkss.XXXXXX")"
+  export TMPDIR="$(mktemp -d "${MK_FIXTMP}/mkss.XXXXXX")"
   unset MEMOKIT_SCRATCH_OFF MEMOKIT_DISK_OFF
   export MEMOKIT_DF_KB=$((500*1048576))
   # report-only (0.6.0) behaviour; the auto-clean tests unset it
@@ -213,7 +213,7 @@ lo_cleanup() { rm -rf "$TMPDIR" "${TROOT_LOGICAL:-}"; unset MEMOKIT_DF_KB MEMOKI
 @test "worktree line skips the session's own worktree (payload cwd) and runs no status/rev-list/log" {
   mk_project '{"version":1,"project":{"name":"Demo","tag":"DMO"},"language":"en"}'
   git -C "$PROJ" worktree add -q "$PROJ/.claude/worktrees/agent-me" -b feature/me
-  SHIM="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkshim.XXXXXX")"
+  SHIM="$(mktemp -d "${MK_FIXTMP}/mkshim.XXXXXX")"
   real="$(command -v git)"
   printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/log"\nexec "%s" "$@"\n' "$SHIM" "$real" > "$SHIM/git"
   chmod +x "$SHIM/git"
@@ -312,7 +312,7 @@ lo_cleanup() { rm -rf "$TMPDIR" "${TROOT_LOGICAL:-}"; unset MEMOKIT_DF_KB MEMOKI
 wt_old() { touch -t 202001010000 "$(git -C "$1" rev-parse --path-format=absolute --git-path index)"; }
 @test "auto-clean removes old merged-clean worktrees (mk/ branch too) and merged mk/ branches; keeps fresh, dirty and unmerged ones" {
   mk_project '{"version":1,"project":{"name":"Demo","tag":"DMO"},"language":"en"}'
-  export MEMOKIT_DF_KB=$((500*1048576)) TMPDIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkss.XXXXXX")"; unset MEMOKIT_AUTOCLEAN_OFF
+  export MEMOKIT_DF_KB=$((500*1048576)) TMPDIR="$(mktemp -d "${MK_FIXTMP}/mkss.XXXXXX")"; unset MEMOKIT_AUTOCLEAN_OFF
   W="$PROJ/.claude/worktrees"
   git -C "$PROJ" worktree add -q "$W/mk-r1-a" -b mk/r1/a; wt_old "$W/mk-r1-a"
   git -C "$PROJ" worktree add -q "$W/agent-x" -b worktree-agent-x; wt_old "$W/agent-x"
@@ -347,7 +347,7 @@ wt_old() { touch -t 202001010000 "$(git -C "$1" rev-parse --path-format=absolute
 }
 @test "auto-clean keeps an old merged-clean worktree that a process runs in or that has a recent transcript" {
   mk_project '{"version":1,"project":{"name":"Demo","tag":"DMO"},"language":"en"}'
-  export TMPDIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkss.XXXXXX")" CLAUDE_CONFIG_DIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkcc.XXXXXX")"; unset MEMOKIT_AUTOCLEAN_OFF
+  export TMPDIR="$(mktemp -d "${MK_FIXTMP}/mkss.XXXXXX")" CLAUDE_CONFIG_DIR="$(mktemp -d "${MK_FIXTMP}/mkcc.XXXXXX")"; unset MEMOKIT_AUTOCLEAN_OFF
   W="$(cd -P "$PROJ" && pwd -P)/.claude/worktrees"
   git -C "$PROJ" worktree add -q "$W/mk-r1-t" -b mk/r1/t; wt_old "$W/mk-r1-t"
   slug="$(printf '%s' "$W/mk-r1-t" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
@@ -369,4 +369,138 @@ wt_old() { touch -t 202001010000 "$(git -C "$1" rev-parse --path-format=absolute
   MEMOKIT_AUTOCLEAN_OFF=1 MEMOKIT_AUTOCLEAN_SYNC=1 run_hook session-start.sh '{}'
   [ -d "$PROJ/.claude/worktrees/mk-r1-a" ]
   ! ctx | grep -qF 'removing'
+}
+
+# --- 0.8.1 (spec 4): the session-start config snapshot -----------------------
+ss_payload() { jq -nc --arg cwd "$PROJ" --arg s "$1" --arg src "$2" '{cwd:$cwd,session_id:$s,source:$src}'; }
+ss_snap() { "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; mk_resolve_root '{}'; mk_config_snapshot_file \"\$1\"" _ "{\"session_id\":\"$1\"}"; }
+
+@test "snapshot: startup, resume and clear write the config byte for byte" {
+  mk_project '{"version":1,"project":{"name":"Demo","tag":"DMO"},"language":"en",
+  "guardedDirs":["src"]}'
+  for src in startup resume clear; do
+    run_hook session-start.sh "$(ss_payload "s-$src" "$src")"
+    [ "$status" -eq 0 ]
+    f="$(ss_snap "s-$src")"
+    [ -f "$f" ] || { echo "$src: no snapshot"; false; }
+    cmp -s "$f" "$PROJ/.claude/memokit.json" || { echo "$src: differs"; false; }
+  done
+}
+@test "snapshot: compact keeps the session-start content after the live file changed" {
+  mk_project
+  run_hook session-start.sh "$(ss_payload s1 startup)"
+  f="$(ss_snap s1)"
+  cmp -s "$f" "$PROJ/.claude/memokit.json"
+  printf '%s' '{"version":1,"project":{"name":"Other","tag":"OTH"},"guardedDirs":["docs"]}' > "$PROJ/.claude/memokit.json"
+  run_hook session-start.sh "$(ss_payload s1 compact)"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$f")" = "$DEFAULT_CONFIG" ]
+  # compact never creates one either
+  run_hook session-start.sh "$(ss_payload s2 compact)"
+  [ ! -e "$(ss_snap s2)" ]
+  # a later startup/clear adopts the live file
+  run_hook session-start.sh "$(ss_payload s1 clear)"
+  cmp -s "$f" "$PROJ/.claude/memokit.json"
+}
+@test "snapshot: a symlink at the snapshot path is not written through, the hook exits 0" {
+  mk_project
+  f="$(ss_snap s1)"
+  printf 'keep' > "$BATS_TEST_TMPDIR/target"
+  ln -s "$BATS_TEST_TMPDIR/target" "$f"
+  run_hook session-start.sh "$(ss_payload s1 startup)"
+  [ "$status" -eq 0 ]
+  ctx | grep -q 'demo'
+  [ "$(cat "$BATS_TEST_TMPDIR/target")" = keep ]
+  # fix round 1 (M4): the refused write unlinks the planted link
+  [ ! -L "$f" ] && [ ! -e "$f" ]
+}
+@test "snapshot: an invalid config at session start writes none and drops an older one" {
+  mk_project '{"version":1,"project":{"name":"Demo","tag":"bad tag"}}'
+  run_hook session-start.sh "$(ss_payload s1 startup)"
+  [ "$status" -eq 0 ]
+  [ ! -e "$(ss_snap s1)" ]
+  # resumed session: the snapshot from its earlier valid start goes
+  printf '%s' "$DEFAULT_CONFIG" > "$PROJ/.claude/memokit.json"
+  run_hook session-start.sh "$(ss_payload s2 startup)"
+  [ -f "$(ss_snap s2)" ]
+  printf '{broken' > "$PROJ/.claude/memokit.json"
+  run_hook session-start.sh "$(ss_payload s2 resume)"
+  [ "$status" -eq 0 ]
+  [ ! -e "$(ss_snap s2)" ]
+}
+@test "snapshot: two session ids give two files" {
+  mk_project
+  run_hook session-start.sh "$(ss_payload s1 startup)"
+  printf '%s' '{"version":1,"project":{"name":"Two","tag":"TWO"}}' > "$PROJ/.claude/memokit.json"
+  run_hook session-start.sh "$(ss_payload s2 startup)"
+  a="$(ss_snap s1)"; b="$(ss_snap s2)"
+  [ "$a" != "$b" ]
+  [ "$(cat "$a")" = "$DEFAULT_CONFIG" ]
+  cmp -s "$b" "$PROJ/.claude/memokit.json"
+}
+# Fix round 1 (M4): a snapshot write that fails on a valid config removes the
+# session's older snapshot, so hooks fall back to the live file.
+@test "snapshot: a failed write drops the older snapshot" {
+  mk_project
+  run_hook session-start.sh "$(ss_payload s1 startup)"
+  f="$(ss_snap s1)"
+  [ -f "$f" ]
+  printf '%s' '{"version":1,"project":{"name":"Two","tag":"TWO"}}' > "$PROJ/.claude/memokit.json"
+  p="$(path_without mktemp)"
+  run "$MK_BASH" -c 'printf "%s" "$2" | PATH="$3" "$0" "$1"' "$MK_BASH" "$HOOKS/session-start.sh" "$(ss_payload s1 resume)" "$p"
+  [ "$status" -eq 0 ]
+  [ ! -e "$f" ]
+}
+# Fix round 2 (S13): a subagent shell (CLAUDE_CODE_CHILD_SESSION=1) running
+# session-start.sh neither rewrites nor deletes the snapshot.
+@test "snapshot: session-start.sh in a subagent shell leaves the snapshot alone" {
+  mk_project
+  run_hook session-start.sh "$(ss_payload s1 startup)"
+  f="$(ss_snap s1)"
+  [ "$(cat "$f")" = "$DEFAULT_CONFIG" ]
+  printf '%s' '{"version":1,"project":{"name":"Two","tag":"TWO"}}' > "$PROJ/.claude/memokit.json"
+  CLAUDE_CODE_CHILD_SESSION=1 run_hook session-start.sh "$(ss_payload s1 startup)"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$f")" = "$DEFAULT_CONFIG" ]
+  printf '{broken' > "$PROJ/.claude/memokit.json"
+  CLAUDE_CODE_CHILD_SESSION=1 run_hook session-start.sh "$(ss_payload s1 resume)"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$f")" = "$DEFAULT_CONFIG" ]
+  # the main session still adopts / drops as before
+  run_hook session-start.sh "$(ss_payload s1 resume)"
+  [ ! -e "$f" ]
+}
+
+# --- 0.8.1: state-file prune at startup --------------------------------------
+sp_old_file() { : > "$1"; touch -t 202001010000 "$1"; }
+@test "prune: startup removes old state files; fresh ones of a live session survive" {
+  mk_project
+  sp_old_file "$TMPDIR/memokit-123-old"
+  : > "$TMPDIR/memokit-123-fresh"
+  MEMOKIT_AUTOCLEAN_OFF=0 MEMOKIT_AUTOCLEAN_SYNC=1 run_hook session-start.sh "$(ss_payload s1 startup)"
+  [ "$status" -eq 0 ]
+  [ ! -e "$TMPDIR/memokit-123-old" ]
+  [ -e "$TMPDIR/memokit-123-fresh" ]
+  [ -e "$TMPDIR/memokit-prune-stamp" ]
+}
+@test "prune: only for source startup" {
+  mk_project
+  for s in resume clear compact; do
+    sp_old_file "$TMPDIR/memokit-123-old"
+    MEMOKIT_AUTOCLEAN_OFF=0 MEMOKIT_AUTOCLEAN_SYNC=1 run_hook session-start.sh "$(ss_payload s1 $s)"
+    [ -e "$TMPDIR/memokit-123-old" ]
+  done
+}
+@test "prune: not under MEMOKIT_AUTOCLEAN_OFF=1" {
+  mk_project
+  sp_old_file "$TMPDIR/memokit-123-old"
+  MEMOKIT_AUTOCLEAN_OFF=1 MEMOKIT_AUTOCLEAN_SYNC=1 run_hook session-start.sh "$(ss_payload s1 startup)"
+  [ -e "$TMPDIR/memokit-123-old" ]
+}
+@test "prune: TMPDIR with a trailing slash and with a space" {
+  mk_project
+  export TMPDIR="$BATS_TEST_TMPDIR/sp dir/"; mkdir -p "$TMPDIR"
+  sp_old_file "${TMPDIR}memokit-123-old"
+  MEMOKIT_AUTOCLEAN_OFF=0 MEMOKIT_AUTOCLEAN_SYNC=1 run_hook session-start.sh "$(ss_payload s1 startup)"
+  [ ! -e "${TMPDIR}memokit-123-old" ]
 }

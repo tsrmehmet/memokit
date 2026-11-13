@@ -90,6 +90,22 @@ fi
 mk_active_marker_write "$PAYLOAD" || true
 mk_load_config
 CONFIG_OK=$?
+# Config snapshot for subagent hooks (0.8.1, lib/common.sh): on startup,
+# resume and clear, the validated config; an invalid one leaves none (an
+# older one from this session goes, so subagents are not judged by a config
+# the session no longer starts with). compact keeps whatever is there. A
+# subagent shell (CLAUDE_CODE_CHILD_SESSION=1) running this script never
+# touches it: defense in depth behind the subagent guard's invocation rule.
+if [ "${CLAUDE_CODE_CHILD_SESSION:-0}" != 1 ] &&
+   [ "$(printf '%s' "$PAYLOAD" | jq -r '.source // ""' 2>/dev/null)" != compact ]; then
+  if [ "$CONFIG_OK" -eq 0 ]; then
+    # A write that fails leaves no older snapshot behind: hooks fall back to
+    # the live file (rm -f unlinks a symlink, never follows it).
+    mk_config_snapshot_write "$PAYLOAD" || rm -f "$(mk_config_snapshot_file "$PAYLOAD")" 2>/dev/null || true
+  else
+    rm -f "$(mk_config_snapshot_file "$PAYLOAD")" 2>/dev/null || true
+  fi
+fi
 
 STATE="$(cat "$MK_ROOT/docs/STATE.md" 2>/dev/null || mk_msg SS_STATE_UNREADABLE)"
 nl=$'\n'
@@ -362,6 +378,12 @@ _ss_wt_autoclean() {
   WT_AUTO_TXT="${nl}${nl}$(mk_msg SS_WT_AUTOCLEAN "$wt_n" "$MK_SCRATCH_STALE_HOURS")"
   WT_REPORT=0
 }
+# 0.8.1: state files of sessions older than 7 days go, at most once a day,
+# at a fresh start only (never resume/clear/compact), same detached job.
+if [ "$AUTOCLEAN" -eq 1 ] && [ "$TEMP_LIB" -eq 1 ] \
+   && [ "$(printf '%s' "$PAYLOAD" | jq -r '.source // ""' 2>/dev/null)" = startup ]; then
+  _ss_bg mk_state_prune
+fi
 WT_AUTO_TXT=""; WT_REPORT=1
 # shellcheck source-path=SCRIPTDIR source=lib/worktrees.sh
 if . "$MK_LIB_DIR/worktrees.sh" 2>/dev/null; then

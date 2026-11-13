@@ -88,17 +88,42 @@ _mk_cf_exw='(grep|egrep|fgrep|jq|ls|cat|head|tail|wc|diff|cp)'
 # shellcheck disable=SC2016  # ERE text: $ and the backtick are literal here
 _mk_cf_exu='[^$`<>&()\]|[$][[:alpha:]_]'
 MK_CF_DYNEXEMPT="^[[:space:]]*${_mk_cf_exw}[[:space:]]+(${_mk_cf_exu})*\$"
-# The approval (grant) file, case-insensitively (macOS file systems are):
-# its name, also through a glob that keeps "grant" (careful?grants,
-# careful*grants), or a glob on a memokit- path in a word that also names a
-# temp location or "careful" (/tmp/memokit-*, $TMPDIR/memokit-*) ->
+# The state files by name (grants, pending, window, the active marker and,
+# 0.8.1, the config snapshot careful-config and the integrity check's
+# records and alert markers careful-integrity, its armed stamps
+# careful-armed; the markitdown cache careful-convert, release fix d: a
+# subagent must not plant Markdown for the orchestrator's next Read; the
+# cache is read through Read, which no Bash rule sees), case-insensitively
+# (macOS file systems are). The approval (grant) file also through a glob that keeps
+# "grant" (careful?grants, careful*grants), or a glob on a memokit- path in
+# a word that also names a temp location or "careful" (/tmp/memokit-*,
+# $TMPDIR/memokit-*) ->
 # careful-state, never approvable. Other globs that may reach it (careful*,
 # ../memokit-*) -> careful-state-glob, approvable: memokit-NNN is also a
 # common directory name.
 _mk_cf_mkglob='memokit-[^[:space:]/.]*[*?[]'
 _mk_cf_tmpword='(/tmp/|/private/tmp/|/var/folders/|tmpdir|careful)'
-MK_CF_STATE_RE="careful-grants|careful-pending|careful-window|careful-active|careful[^[:space:]/.]*[*?[][^[:space:]/.]*grant|${_mk_cf_tmpword}[^[:space:]]*${_mk_cf_mkglob}|${_mk_cf_mkglob}[^[:space:]]*${_mk_cf_tmpword}"
+MK_CF_STATE_RE="careful-grants|careful-pending|careful-window|careful-active|careful-config|careful-integrity|careful-armed|careful-convert|careful[^[:space:]/.]*[*?[][^[:space:]/.]*grant|${_mk_cf_tmpword}[^[:space:]]*${_mk_cf_mkglob}|${_mk_cf_mkglob}[^[:space:]]*${_mk_cf_tmpword}"
 MK_CF_STATE_GLOB_RE='careful[^[:space:]/.]*[*?[]|memokit-[^[:space:]/.]*[*?[]'
+# Computed writes into state paths (spec 0.8.1 3c): a word (no blank or
+# ; & |) holding memokit- or careful- and one of $, a backtick or { (its
+# name is built by the shell, so the literal rules above cannot see it) in a
+# write position: after >, >> or >| (every >: in bash "x ->f" is - and a
+# redirection), after dd's of=, any word after tee that does not start with
+# < (an input redirection is a read), or the last word of cp/mv/ln/install
+# in its segment, redirections and a # comment after it aside (their
+# sources are reads). As the glob rules: careful-state (never approvable) when the
+# command also names a temp location or careful (_mk_cf_tmpword),
+# careful-state-glob (approvable) otherwise, since memokit-NNN is also a
+# common file name (_mk_cf_wstate). Checked on the views; a too-large
+# command gets the cheaper literal test _mk_cf_bigstate instead. Known miss
+# (within the cap): a $( ... ) with blanks in a cp/mv/ln/install
+# destination.
+_mk_cf_ww='[^[:space:];&|]'
+_mk_cf_cw="(memokit-|careful-)${_mk_cf_ww}*[\$\`{]|[\$\`{]${_mk_cf_ww}*(memokit-|careful-)"
+_mk_cf_sw="([^[:space:];&|<]${_mk_cf_ww}*)?(${_mk_cf_cw})"
+_mk_cf_redir="[0-9]*&?[<>]+[&|]?[[:space:]]*${_mk_cf_ww}*"
+MK_CF_STATE_WRITE_RE=">>?[|]?[[:space:]]*${_mk_cf_ww}*(${_mk_cf_cw})|(^|[[:space:]])of=${_mk_cf_ww}*(${_mk_cf_cw})|(^|[^[:alnum:]_.-])tee([[:space:]]+[^[:space:];&|<]${_mk_cf_ww}*)*[[:space:]]+${_mk_cf_sw}|(^|[^[:alnum:]_.-])(cp|mv|ln|install)([[:space:]]+${_mk_cf_ww}+)*[[:space:]]+${_mk_cf_sw}${_mk_cf_ww}*([[:space:]]+${_mk_cf_redir})*[[:space:]]*(\$|[;&|#])"
 # Set (as locals) only by _mk_cf_labels; see _mk_cf_rm.
 _MK_CF_TEMP_OK=0; _MK_CF_TEMP_LIT=0
 # 1 only when guard-destructive.sh sets it, after sourcing this file, for a
@@ -122,6 +147,36 @@ _mk_cf_has() {
   # CI runners) printf then reports a write error: not a failure, keep quiet.
   printf '%s' "$2" 2>/dev/null | grep -Eq"${3:-}" -- "$1" 2>/dev/null || rc=$?
   [ "$rc" -ne 1 ]
+}
+
+# _mk_cf_wstate ERE TEXT -- when TEXT matches ERE (case-insensitive), print
+# careful-state if TEXT also matches MK_CF_STATE_RE or names a temp location
+# (_mk_cf_tmpword), careful-state-glob otherwise. One grep when ERE misses.
+_mk_cf_wstate() {
+  _mk_cf_has "$1" "$2" i || return 0
+  if _mk_cf_has "$MK_CF_STATE_RE|$_mk_cf_tmpword" "$2" i; then
+    printf 'careful-state\n'
+  else
+    printf 'careful-state-glob\n'
+  fi
+}
+
+# _mk_cf_bigstate TEXT -- for a command past MK_CF_MAX_CHARS: careful-state
+# when TEXT holds memokit- or careful- (any case) and also any $, backtick
+# or {, wherever they are. _mk_cf_labels passes the raw text plus its
+# quote-, backslash- and newline-stripped view, so memo\kit- or "memo"kit-
+# is seen too. Two fixed-string greps (LC_ALL=C), no regex over the
+# unbounded text; a grep error counts as a hit (fail closed).
+_mk_cf_bigstate() {
+  local rc=0
+  printf '%s' "$1" 2>/dev/null | LC_ALL=C grep -qiF -e memokit- -e careful- 2>/dev/null || rc=$?
+  # only exit 1 (searched, no match) clears; 0 goes on, an error falls through
+  if [ "$rc" -eq 1 ]; then return 0; fi
+  if [ "$rc" -eq 0 ]; then
+    printf '%s' "$1" 2>/dev/null | LC_ALL=C grep -qF -e "\$" -e "\`" -e "{" 2>/dev/null || rc=$?
+    if [ "$rc" -eq 1 ]; then return 0; fi
+  fi
+  printf 'careful-state\n'
 }
 
 # _mk_cf_empty IN OUT -- true when a stage turned IN into an empty OUT that
@@ -818,7 +873,14 @@ _mk_cf_labels() {
     *) printf 'careful-state\n' ;;
   esac
   if _mk_cf_has "$MK_CF_STATE_GLOB_RE" "$1$nl$t" i; then printf 'careful-state-glob\n'; fi
-  if [ "${#1}" -gt "$MK_CF_MAX_CHARS" ]; then printf 'too-large\n'; return 0; fi
+  # Too large for the views: the literal computed-name test instead of the
+  # write rule, so a long command does not turn a state write approvable;
+  # on the raw text and t (a t that could not be built already printed
+  # careful-state above).
+  if [ "${#1}" -gt "$MK_CF_MAX_CHARS" ]; then
+    _mk_cf_bigstate "$1$nl$t"
+    printf 'too-large\n'; return 0
+  fi
   # join and strip only change backslash-newline continuations (and a
   # trailing backslash): without one the views are the raw text itself (no
   # awk, nothing to go wrong). With one, a per-call first line must come back
@@ -866,7 +928,7 @@ _mk_cf_labels() {
       _MK_CF_TEMP_OK=1; _MK_CF_TEMP_LIT=1
     fi
   fi
-  if _mk_cf_has "$MK_CF_STATE_RE" "$views" i; then printf 'careful-state\n'; fi
+  _mk_cf_wstate "$MK_CF_STATE_RE|$MK_CF_STATE_WRITE_RE" "$views"
   if _mk_cf_has "$MK_CF_STATE_GLOB_RE" "$views" i; then printf 'careful-state-glob\n'; fi
   # The DYNRM exemption is decided ONCE, on the raw text: every view is ONE
   # segment (fork-free test; a flat view that could not be built: not single)
@@ -926,6 +988,9 @@ mk_careful_bad_patterns() {
 }
 
 MK_CF_TTL=600
+# The longest change window in minutes (config.jq checks windowMinutes
+# against the same number).
+MK_CF_WINDOW_MAX_MIN=240
 
 _mk_cf_sha256() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi
@@ -1051,17 +1116,19 @@ mk_careful_pending_req_set() {
 
 # mk_careful_pending_req_get SESSION -- print the code of the session's last
 # request while its record is unexpired; exit 1 otherwise (an expired or
-# malformed record is removed). A guard deny never touches the record; only
+# malformed record is removed; an expiry later than now + MK_CF_TTL is
+# malformed). A guard deny never touches the record; only
 # mk_careful_pending_clear (approval) and expiry remove it.
 mk_careful_pending_req_get() {
-  local f c="" e=""
+  local f c="" e="" now
   f="$(mk_careful_pending_req_file "$1")"
   _mk_cf_unsafe "$f" && return 1
   [ -f "$f" ] || return 1
   read -r c e < "$f" || true
   case "$e" in ''|*[!0-9]*) rm -f "$f"; return 1 ;; esac
   { [ "${#e}" -le 12 ] && [ -n "$c" ]; } || { rm -f "$f"; return 1; }
-  [ "$e" -gt "$(date +%s)" ] || { rm -f "$f"; return 1; }
+  now="$(date +%s)"
+  { [ "$e" -gt "$now" ] && [ "$e" -le "$((now + MK_CF_TTL))" ]; } || { rm -f "$f"; return 1; }
   printf '%s\n' "$c"
 }
 
@@ -1078,9 +1145,10 @@ mk_careful_pending_clear() {
 
 # mk_careful_pending_get SESSION [CODE] -- print the pending line while it is
 # unexpired (and, with CODE, matches it); exit 1 otherwise. The expiry keeps
-# its "!" flag in the output. An expired or malformed file is removed.
+# its "!" flag in the output. An expired or malformed file is removed; an
+# expiry later than now + MK_CF_TTL is malformed.
 mk_careful_pending_get() {
-  local f code exp rest e
+  local f code exp rest e now
   f="$(mk_careful_pending_file "$1")"
   _mk_cf_unsafe "$f" && return 1
   [ -f "$f" ] || return 1
@@ -1089,7 +1157,8 @@ mk_careful_pending_get() {
   # a dropped line also drops the session's request record once that expired
   case "$e" in ''|*[!0-9]*) rm -f "$f"; mk_careful_pending_req_get "$1" >/dev/null || true; return 1 ;; esac
   { [ "${#e}" -le 12 ] && [ -n "$code" ]; } || { rm -f "$f"; mk_careful_pending_req_get "$1" >/dev/null || true; return 1; }
-  [ "$e" -gt "$(date +%s)" ] || { rm -f "$f"; mk_careful_pending_req_get "$1" >/dev/null || true; return 1; }
+  now="$(date +%s)"
+  { [ "$e" -gt "$now" ] && [ "$e" -le "$((now + MK_CF_TTL))" ]; } || { rm -f "$f"; mk_careful_pending_req_get "$1" >/dev/null || true; return 1; }
   if [ -n "${2:-}" ] && [ "$code" != "$2" ]; then return 1; fi
   printf '%s %s%s\n' "$code" "$exp" "${rest:+ $rest}"
 }
@@ -1103,7 +1172,8 @@ mk_careful_window_file() { mk_tmp "careful-window-$(_mk_cf_sess "$1")"; }
 _mk_cf_window_failed_file() { mk_tmp "careful-window-failed-$(_mk_cf_sess "$1")"; }
 
 # mk_careful_window_open SESSION MINUTES TARGETS -- open the session's change
-# window: one line "<expiry> <targets...>". MINUTES is an integer 1-240,
+# window: one line "<expiry> <targets...>". MINUTES is an integer from 1 to
+# MK_CF_WINDOW_MAX_MIN,
 # TARGETS a non-empty newline list, SESSION non-empty; anything else exits 1
 # and writes nothing.
 mk_careful_window_open() {
@@ -1113,7 +1183,7 @@ mk_careful_window_open() {
   _mk_cf_unsafe "$f" && return 1
   case "$2" in ''|*[!0-9]*) return 1 ;; esac
   [ "${#2}" -le 3 ] || return 1
-  [ "$((10#$2))" -ge 1 ] && [ "$((10#$2))" -le 240 ] || return 1
+  [ "$((10#$2))" -ge 1 ] && [ "$((10#$2))" -le "$MK_CF_WINDOW_MAX_MIN" ] || return 1
   words="$(_mk_cf_words "$3")" || return 1
   exp="$(( $(date +%s) + 10#$2 * 60 ))"
   _mk_cf_write "$f" "$exp $words"
@@ -1121,9 +1191,11 @@ mk_careful_window_open() {
 
 # mk_careful_window_get SESSION -- print "<expiry> <targets...>" while the
 # session's window is open; an expired or malformed file is removed and the
-# exit is 1.
+# exit is 1. An expiry later than now + MK_CF_WINDOW_MAX_MIN (the longest
+# window mk_careful_window_open writes) is malformed: a hand-written far-future
+# expiry buys nothing.
 mk_careful_window_get() {
-  local f exp rest
+  local f exp rest now
   [ -n "$1" ] || return 1
   f="$(mk_careful_window_file "$1")"
   _mk_cf_unsafe "$f" && return 1
@@ -1131,7 +1203,8 @@ mk_careful_window_get() {
   read -r exp rest < "$f" || true
   case "$exp" in ''|*[!0-9]*) rm -f "$f"; return 1 ;; esac
   { [ "${#exp}" -le 12 ] && [ -n "$rest" ]; } || { rm -f "$f"; return 1; }
-  [ "$exp" -gt "$(date +%s)" ] || { rm -f "$f"; return 1; }
+  now="$(date +%s)"
+  { [ "$exp" -gt "$now" ] && [ "$exp" -le "$((now + MK_CF_WINDOW_MAX_MIN * 60))" ]; } || { rm -f "$f"; return 1; }
   printf '%s %s\n' "$exp" "$rest"
 }
 

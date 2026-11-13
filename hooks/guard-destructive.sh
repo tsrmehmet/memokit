@@ -75,7 +75,7 @@ fi
 
 if ! mk_load_config; then
   if [ "$MK_CONFIG_ERR" = "jq" ]; then static_deny CONFIG_NO_JQ_STATIC; exit 0; fi
-  deny "$(mk_msg CONFIG_INVALID "$MK_CONFIG_ERR")"
+  deny "$(mk_config_invalid_msg)"
   exit 0
 fi
 
@@ -101,8 +101,8 @@ case "$tool" in
       deny "$(mk_msg CF_INVALID_JSON)"; exit 0
     fi
     # Follow symlink chains (max 10 hops; bash 3.2/BSD-safe, no readlink -f).
-    # Any hop naming the grant, pending, window or active files, or an
-    # unresolvable/looping link, denies.
+    # Any hop naming the grant, pending, window, active or config-snapshot
+    # files, or an unresolvable/looping link, denies.
     hops=0
     while :; do
       case "$fpath" in
@@ -110,7 +110,8 @@ case "$tool" in
         *[Cc][Aa][Rr][Ee][Ff][Uu][Ll]-[Gg][Rr][Aa][Nn][Tt][Ss]*|\
         *[Cc][Aa][Rr][Ee][Ff][Uu][Ll]-[Pp][Ee][Nn][Dd][Ii][Nn][Gg]*|\
         *[Cc][Aa][Rr][Ee][Ff][Uu][Ll]-[Ww][Ii][Nn][Dd][Oo][Ww]*|\
-        *[Cc][Aa][Rr][Ee][Ff][Uu][Ll]-[Aa][Cc][Tt][Ii][Vv][Ee]*) deny "$(mk_msg CF_STATE)"; exit 0 ;;
+        *[Cc][Aa][Rr][Ee][Ff][Uu][Ll]-[Aa][Cc][Tt][Ii][Vv][Ee]*|\
+        *[Cc][Aa][Rr][Ee][Ff][Uu][Ll]-[Cc][Oo][Nn][Ff][Ii][Gg]*) deny "$(mk_msg CF_STATE)"; exit 0 ;;
       esac
       [ -L "$fpath" ] || break
       hops=$((hops + 1))

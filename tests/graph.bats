@@ -15,7 +15,7 @@ setup_graph() {
   printf 'graphify-out/\n' > "$PROJ/.gitignore"
   printf 'x = 1\n' > "$PROJ/src/a.py"
   commit_all setup
-  STUB="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkstub.XXXXXX")"
+  STUB="$(mktemp -d "${MK_FIXTMP}/mkstub.XXXXXX")"
   STUB_LOG="$STUB/calls.log"; : > "$STUB_LOG"
   cat > "$STUB/graphify" <<'EOF'
 #!/bin/sh
@@ -121,7 +121,7 @@ marker() { cat "$PROJ/graphify-out/.graph_commit" 2>/dev/null; }
 }
 @test "refreshScript under a symlinked dir that leaves the root is not run: exit 2" {
   setup_graph "$(graph_cfg en ',"refreshScript":"scripts/r.sh"')"
-  out="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkout.XXXXXX")"
+  out="$(mktemp -d "${MK_FIXTMP}/mkout.XXXXXX")"
   printf '#!/bin/sh\ntouch "%s/RAN"\n' "$out" > "$out/r.sh"
   ln -s "$out" "$PROJ/scripts"
   gs refresh

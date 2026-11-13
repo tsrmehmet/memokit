@@ -58,7 +58,7 @@ if ! mk_load_config; then
     mk_budget_static_deny CONFIG_NO_JQ_STATIC
     exit 0
   fi
-  if _ge_out="$(jq -n --arg r "$(mk_msg CONFIG_INVALID "$MK_CONFIG_ERR")" \
+  if _ge_out="$(jq -n --arg r "$(mk_config_invalid_msg)" \
       '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}' 2>/dev/null)" && [ -n "$_ge_out" ]; then
     mk_budget_deny_json "$_ge_out"
   else

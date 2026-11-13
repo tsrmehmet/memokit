@@ -553,3 +553,37 @@ mk_human_kb() {
   case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac
   LC_ALL=C awk -v k="$1" 'BEGIN { if (k >= 1048576) printf "%.1f GB", k / 1048576; else printf "%d MB", int(k / 1024) }'
 }
+
+# mk_state_prune [DIR] [DAYS] -- remove memokit state entries (name
+# memokit-<digits>-*, directly under DIR, owned by us, untouched for DAYS
+# days) left by earlier sessions; prints how many went. Never follows a
+# symlink (a link is unlinked, its target stays). At most once a day: the
+# stamp DIR/memokit-prune-stamp (no digits segment, so never matched) younger
+# than 24 h makes it return at once. DIR defaults to ${TMPDIR:-/tmp}.
+mk_state_prune() {
+  local dir="${1:-${TMPDIR:-/tmp}}" days="${2:-7}" stamp p base rest n=0 uid t now tmp
+  case "$days" in ''|*[!0-9]*) days=7 ;; esac
+  [ "$days" -ge 1 ] || days=1
+  [ -d "$dir" ] || { printf '0'; return 0; }
+  case "$dir" in /*|./*) ;; *) dir="./$dir" ;; esac
+  dir="${dir%/}/"
+  stamp="${dir}memokit-prune-stamp"
+  # Trust the stamp only as a regular file of ours, not dated in the future.
+  if [ -f "$stamp" ] && [ ! -L "$stamp" ] && [ -O "$stamp" ]; then
+    t="$(mk_temp_mtime "$stamp")" || t=0
+    now="$(date +%s)"
+    if [ "$t" -le "$now" ] && [ $((now - t)) -lt 86400 ]; then printf '0'; return 0; fi
+  fi
+  uid="$(id -u)"
+  while IFS= read -r -d '' p; do
+    base="${p##*/}"; rest="${base#memokit-}"
+    case "${rest%%-*}" in ''|*[!0-9]*) continue ;; esac
+    if rm -rf -- "$p" 2>/dev/null; then n=$((n + 1)); fi
+  done < <(find "$dir" -maxdepth 1 -name 'memokit-[0-9]*-*' -user "$uid" -mtime "+$((days - 1))" -print0 2>/dev/null)
+  # Stamp: mktemp in the same dir + mv -f (replaces a planted symlink or
+  # foreign file itself, never writes through it).
+  tmp="$(umask 077; mktemp "$stamp.XXXXXX" 2>/dev/null)" && {
+    if [ -d "$stamp" ]; then rm -f -- "$tmp"; else mv -f "$tmp" "$stamp" 2>/dev/null || rm -f -- "$tmp"; fi
+  }
+  printf '%s' "$n"
+}

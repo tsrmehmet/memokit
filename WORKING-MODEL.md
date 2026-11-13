@@ -6,6 +6,7 @@ Injected at every session start. The project's CLAUDE.md adds project facts; it 
 - The main session is the **orchestrator**. It plans, delegates, verifies and talks to the user. It never writes under the project's guarded dirs (`guardedDirs` in `.claude/memokit.json`); a PreToolUse hook enforces this for Edit/Write/MultiEdit/NotebookEdit and Bash write constructs.
 - Production code and tests are written by the **`memokit:coder`** subagent (Sonnet), one slice at a time.
 - Finished slices are reviewed by **`memokit:reviewer`** (Opus) before they count as done.
+- Before executing a plan with two or more remaining tasks outside `/memokit:resume`, the orchestrator offers `/memokit:parallel` or one at a time, under the resume conditions: no active run, two or more remaining tasks, `parallel.maxCoders` > 1, no talk-first stamp.
 - Subagents do not own repository history: no commit, merge, rebase, reset, push, branch switch, tag/ref/worktree deletion, stash, and no delegation to other agents. A hook enforces this.
 - Emergency override for the write guard: `MEMOKIT_GUARD_OFF=1` in the environment Claude Code passes to hooks — `"env": {"MEMOKIT_GUARD_OFF": "1"}` in `.claude/settings.local.json`, or exported before launching `claude`; exporting it inside a Bash tool call does not reach hooks. Tell the user when you rely on it.
 
@@ -58,6 +59,7 @@ git -C "$REPO" ls-files -z -co --exclude-standard -- <paths> | (cd "$REPO" && xa
 ## §8 Design quality
 - Apply SOLID pragmatically, balanced by KISS and YAGNI: no complex structure for a simple job.
 - No abstraction (interface, layer, indirection) without a second real use.
+- No unrequested option, flag or configurability, and no error handling for a case that cannot happen.
 - The project's `docs/PATTERNS.md` wins over all of this.
 - Reviewers reject both SOLID violations that matter and over-engineering.
 

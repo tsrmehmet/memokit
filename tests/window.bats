@@ -141,6 +141,39 @@ second line"; mk_careful_window_get s1; echo "get=$?"; mk_careful_window_failed 
   printf '%s\n' "$output" | grep -qx 'emptydir'
 }
 
+# 0.8.1 (spec 3c): an expiry later than a writer could have set (window: now
+# + 240 min; pending line and request record: now + MK_CF_TTL) is malformed:
+# the file is removed and the read exits 1, so a hand-written far-future
+# expiry buys nothing.
+@test "window: an expiry past now + 240 min is malformed and removed; within it is kept" {
+  lib 'f="$(mk_careful_window_file s1)"; ( umask 077; printf "%s host:prod\n" "$(( $(date +%s) + 241 * 60 ))" > "$f" ); mk_careful_window_get s1; echo "g=$?"; [ ! -e "$f" ] && echo gone'
+  printf '%s\n' "$output" | grep -qx 'g=1' || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -qx 'gone'
+  lib 'f="$(mk_careful_window_file s1)"; ( umask 077; printf "%s host:prod\n" "$(( $(date +%s) + 239 * 60 ))" > "$f" ); mk_careful_window_get s1; echo "g=$?"; [ -e "$f" ] && echo kept'
+  printf '%s\n' "$output" | grep -qx 'g=0' || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -qx 'kept'
+  printf '%s\n' "$output" | grep -q ' host:prod$'
+  # a window opened for the full 240 minutes reads back
+  lib 'mk_careful_window_open s2 240 "host:prod" && mk_careful_window_get s2 >/dev/null && echo ok'
+  [ "$output" = ok ]
+}
+
+@test "pending: an expiry past now + MK_CF_TTL is malformed and removed (line and request record)" {
+  lib 'f="$(mk_careful_pending_file s1)"; ( umask 077; printf "abc123 %s host:a\n" "$(( $(date +%s) + MK_CF_TTL + 60 ))" > "$f" ); mk_careful_pending_get s1; echo "g=$?"; [ ! -e "$f" ] && echo gone'
+  printf '%s\n' "$output" | grep -qx 'g=1' || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -qx 'gone'
+  # flagged ("!") line too
+  lib 'f="$(mk_careful_pending_file s1)"; ( umask 077; printf "abc123 %s! host:a\n" "$(( $(date +%s) + MK_CF_TTL + 60 ))" > "$f" ); mk_careful_pending_get s1 abc123; echo "g=$?"; [ ! -e "$f" ] && echo gone'
+  printf '%s\n' "$output" | grep -qx 'g=1' || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -qx 'gone'
+  lib 'r="$(mk_careful_pending_req_file s1)"; ( umask 077; printf "abc123 %s\n" "$(( $(date +%s) + MK_CF_TTL + 60 ))" > "$r" ); mk_careful_pending_req_get s1; echo "g=$?"; [ ! -e "$r" ] && echo gone'
+  printf '%s\n' "$output" | grep -qx 'g=1' || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -qx 'gone'
+  # what the writers set still reads back
+  lib 'mk_careful_pending_set s2 abc123 "host:a" && mk_careful_pending_req_set s2 abc123 && mk_careful_pending_get s2 abc123 >/dev/null && mk_careful_pending_req_get s2'
+  [ "$output" = abc123 ]
+}
+
 # --- guard-destructive ---
 # The hook asks for a change plan (CF_REMOTE*), lets a command through when
 # an open window covers every remote target of it, and writes the pending
@@ -1008,7 +1041,7 @@ k8s:prod'
     "gh workflow run https://github.com/o/r/actions/workflows/deploy.yml"
   # addendum 3: the pass is bound to the project repository through the
   # payload cwd (gh and a git push without -C use the cwd's repository)
-  other="$(mktemp -d "${BATS_TMPDIR:-/tmp}/other.XXXXXX")"
+  other="$(mktemp -d "${MK_FIXTMP}/other.XXXXXX")"
   git -C "$other" init -q
   git -C "$other" remote add origin https://example.org/evil/x.git
   gd "git push origin deploy" toolu_cw1 '{"cwd":"'"$other"'"}'
@@ -1037,6 +1070,45 @@ k8s:prod'
   [ "$(decision)" = deny ] || { echo "gh from a nested repo passed"; false; }
   gd "git -C $PROJ/nested push origin deploy" toolu_cw9
   [ "$(decision)" = deny ]
+}
+
+@test "0.8.1: a window never covers a git push that deletes or mirrors refs" {
+  mk_project "$WCFG"
+  git -C "$PROJ" remote add origin https://example.com/x.git
+  open_window "$all_targets"
+  local c n=0
+  for c in "git push origin deploy" "git push -u origin HEAD:deploy" "git push -f origin deploy" \
+           "git push -u origin deploy" "git push --force-with-lease origin deploy" \
+           "git push --force-with-lease=deploy:abc123 origin deploy" \
+           "git push -o ci.skip origin deploy" "git push -uf origin deploy" \
+           "git push --push-option=ci.skip origin deploy" "git -C $PROJ push -u origin deploy"; do
+    n=$((n + 1))
+    gd "$c" "toolu_dpok$n"
+    [ -z "$output" ] || { echo "denied: $c -> $output"; false; }
+  done
+  in_window_denied toolu_dpd \
+    "git push --mirror origin" \
+    "git push --all origin" \
+    "git push --branches origin" \
+    "git push --prune origin deploy" \
+    "git push --delete origin deploy" \
+    "git push -d origin deploy" \
+    "git push -fd origin deploy" \
+    "git push origin :deploy" \
+    "git push origin +:deploy" \
+    "git push origin deploy :old" \
+    "git push origin deploy --delete old" \
+    "git push --del origin deploy" \
+    "git push --dele origin deploy" \
+    "git push --mir origin" \
+    "git push --pru origin deploy" \
+    "git push --bran origin" \
+    "git push --al origin" \
+    "git push -4d origin deploy" \
+    "git push -d4 origin deploy" \
+    "git push -u-d origin deploy" \
+    "git push origin deploy -- :old" \
+    "git push -o ci.skip --delete origin deploy"
 }
 
 @test "round 4: scp -r/-p pass; UserKnownHostsFile and ssh -r do not" {

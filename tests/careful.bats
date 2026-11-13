@@ -91,6 +91,12 @@ helm-uninstall|helm delete api
 docker-prune|docker system prune -af
 docker-prune|docker volume rm data
 careful-state|cat /tmp/memokit-123-careful-grants
+careful-state|rm -f x/memokit-123-careful-integrity-alert-s1
+careful-state|rm -f x/memokit-0-careful-integrity-notice-s1
+careful-state|cat y/memokit-1-Careful-Integrity-s1-toolu_1
+careful-state|rm x/memokit-1-careful-armed-s1-agent-1
+careful-state|echo x > /tmp/memokit-123-careful-convert/k/doc.pdf.md
+careful-state|cp forged.md /var/folders/x/T/memokit-1-Careful-Convert/k/a.pdf.md
 EOF
 }
 
@@ -952,4 +958,161 @@ XEOF
   [ "$(decision)" = "deny" ]
   run_hook guard-destructive.sh ''
   [ "$(decision)" = "deny" ]
+}
+
+# 0.8.1 (spec 3c): a computed word (with $, a backtick or a brace) naming a
+# memokit- or careful- path in a write position (>, >>, tee, the last word
+# of cp/mv/ln/install, dd of=) is careful-state: denied for the main session
+# and subagents, never approvable. Reads and the careful-state-glob rules
+# are unchanged.
+@test "0.8.1: computed writes into state paths are careful-state (main and subagent, no code)" {
+  mk_project "$(cfg '"careful":{"patterns":[]}')"
+  local c a
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    labels "$c"
+    printf '%s\n' "$output" | grep -qx 'careful-state' || { echo "labels: $c -> [$output]"; false; }
+    for a in "" agent-1; do
+      run_hook guard-destructive.sh "$(bash_payload "$c" "$a")"
+      [ "$(decision)" = deny ] || { echo "allowed (${a:-main}): $c"; false; }
+      reason | grep -qF "approval files are blocked" || { echo "(${a:-main}) $c -> $(reason)"; false; }
+      if reason | grep -qE "'(onay|approve) [0-9a-f]{6}'"; then echo "offers a code (${a:-main}): $c"; false; fi
+    done
+  done <<'EOF'
+echo x > "$TMPDIR/memokit-$h-careful-window-$s"
+tee /tmp/memokit-${h}-x < f
+cp f /tmp/memokit-`cksum<<<x`-y
+dd if=f of=$TMPDIR/memokit-{1,2}-z
+ln -s f "/tmp/careful-$n"
+EOF
+  # more spellings of the same positions (each names a temp location or
+  # careful-); fix round 1: trailing redirections and a comment after a
+  # cp/mv destination, >|, &>
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    labels "$c"
+    printf '%s\n' "$output" | grep -qx 'careful-state' || { echo "labels: $c -> [$output]"; false; }
+  done <<'EOF'
+printf x >>$TMPDIR/memokit-$h-y
+echo x 2> "${TMPDIR}/Memokit-1-z"
+ls | tee -a out.log $T/careful-$s
+mv f "$TMPDIR"/memokit-$h-a; ls
+install -m 600 f /tmp/memokit-{a,b}
+cp -f x /tmp/`id -u`-memokit-y && ls
+dd of=/tmp/careful-$s if=f
+cp f /tmp/memokit-$h-y 2>/dev/null
+cp f /tmp/memokit-$h-y >/dev/null
+cp f /tmp/memokit-$h-y </dev/null
+mv f /tmp/memokit-$h-y # move it
+cp f /tmp/memokit-$h-y 2> /dev/null >&2 && ls
+echo x >| $TMPDIR/memokit-$h-y
+ls &> /tmp/memokit-$h-y
+EOF
+}
+
+# Fix round 1 (M5): without a temp location in the command (the same words
+# as the glob rule: /tmp/, /private/tmp/, /var/folders/, tmpdir, careful) a
+# computed memokit- write target is careful-state-glob, approvable with a
+# code: memokit-NNN is also a common directory or file name.
+@test "0.8.1: a computed memokit- write without a temp location is careful-state-glob (approvable)" {
+  mk_project "$(cfg '"careful":{"patterns":[]}')"
+  local c
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    labels "$c"
+    printf '%s\n' "$output" | grep -qx 'careful-state-glob' || { echo "labels: $c -> [$output]"; false; }
+    if printf '%s\n' "$output" | grep -qx 'careful-state'; then echo "non-approvable: $c -> [$output]"; false; fi
+    run_hook guard-destructive.sh "$(bash_payload "$c")"
+    [ "$(decision)" = deny ] || { echo "allowed: $c"; false; }
+    reason | grep -qE "'approve [0-9a-f]{6}'" || { echo "no code: $c -> $(reason)"; false; }
+  done <<'EOF'
+npm pack > memokit-$v.tgz
+git archive HEAD > dist/memokit-$v.tar
+cp README.md dist/memokit-$v/
+EOF
+}
+
+# Fix round 2: in bash -> is "-" followed by a redirection, so every > is a
+# write position (fix round 1's -> / => exception hid real writes after a
+# bare - argument). Without a temp word the label is careful-state-glob
+# (approvable); careful- is itself a temp word (_mk_cf_tmpword).
+@test "0.8.1: every > is a write position, also after a bare - (-> and =>)" {
+  mk_project "$(cfg '"careful":{"patterns":[]}')"
+  local c
+  labels 'echo "use -> memokit-$v"'
+  printf '%s\n' "$output" | grep -qx 'careful-state-glob' || { echo "use ->: [$output]"; false; }
+  if printf '%s\n' "$output" | grep -qx 'careful-state'; then echo "use ->: non-approvable [$output]"; false; fi
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    labels "$c"
+    printf '%s\n' "$output" | grep -qx 'careful-state' || { echo "labels: $c -> [$output]"; false; }
+  done <<'EOF'
+echo "a => careful-$x"
+cat - > $TMPDIR/memokit-$h
+printf x - > /tmp/memokit-$h-y
+cat -  >$TMPDIR/memokit-$h
+echo - >/tmp/memokit-$h
+printf x -> /tmp/memokit-$h-y
+echo x ->| /tmp/memokit-$h
+EOF
+}
+
+@test "0.8.1: reads and literal names of memokit- paths keep their 0.8.0 labels" {
+  mk_project "$(cfg '"careful":{"patterns":[]}')"
+  local c
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    labels "$c"
+    [ -z "$output" ] || { echo "labelled: $c -> [$output]"; false; }
+    run_hook guard-destructive.sh "$(bash_payload "$c")"
+    [ "$(decision)" = allow ] || { echo "denied: $c -> $(reason)"; false; }
+  done <<'EOF'
+ls /tmp/memokit-123-foo
+cat "$TMPDIR/memokit-$h-x"
+mkdir memokit-$v
+cp "$TMPDIR/memokit-$h-x" ./copy
+tee out.log < /tmp/memokit-$h-x
+echo $x > notes/memokit.txt
+echo x > /tmp/memokit-123-foo
+EOF
+}
+
+# Fix round 2: past the cap the state test is two fixed-string greps; a grep
+# that fails counts as a hit (careful-state), never as "no state word".
+@test "0.8.1: the over-cap state test is literal and fails closed" {
+  mk_project
+  run "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; . '$HOOKS/lib/careful.sh'
+    _mk_cf_bigstate 'cp f MEMOKIT-\$(id -u)'; echo a
+    _mk_cf_bigstate 'npm pack > memokit-1.tgz'; echo b
+    _mk_cf_bigstate 'echo \$x {a,b}'; echo c"
+  [ "$output" = "careful-state
+a
+b
+c" ] || { echo "$output"; false; }
+  stub="$BATS_TEST_TMPDIR/stub"; mkdir -p "$stub"
+  printf '#!/bin/sh\ncat >/dev/null; exit 2\n' > "$stub/grep"; chmod +x "$stub/grep"
+  run env PATH="$stub:$PATH" "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; . '$HOOKS/lib/careful.sh'; _mk_cf_bigstate 'ls'"
+  [ "$output" = careful-state ] || { echo "[$output]"; false; }
+}
+
+# Fix round 3: past the cap the literal test also reads the quote-,
+# backslash- and newline-stripped text, so splitting the name does not hide it.
+@test "0.8.1: over the cap, quote or backslash splitting does not hide a state name" {
+  mk_project
+  local big c nl='
+'
+  big="$(awk 'BEGIN { for (i = 0; i < 6000; i++) printf "ls src/a.cs\n" }')"
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    labels "$big$nl$c"
+    printf '%s\n' "$output" | grep -qx 'careful-state' || { echo "$c -> [$output]"; false; }
+    printf '%s\n' "$output" | grep -qx 'too-large' || { echo "$c -> [$output]"; false; }
+  done <<'EOF'
+cp f memo\kit-$h
+cp f "memo"kit-$h
+cp f 'care'ful-$x
+cp f memo""kit-$h
+EOF
+  labels "$big${nl}cp f \"memo\"kit-1"
+  [ "$output" = too-large ] || { echo "[$output]"; false; }
 }

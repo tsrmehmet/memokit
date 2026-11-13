@@ -166,3 +166,40 @@ GATE_STEP='If `.claude/memokit.json` does not exist in the project root, stop'
   grep '^1\. ' "$MK_REPO/agents/reviewer.md" | grep -qF 'sees the files under test' || { echo reviewer; false; }
   run grep -F 'integration/Docker/E2E/coverage' "$MK_REPO/skills/resume/SKILL.md"; [ "$status" -ne 0 ]
 }
+@test "0.8.1 karpathy: coder surgical changes, ambiguity, simpler path, Assumptions line" {
+  r2="$(grep '^2\. ' "$MK_REPO/agents/coder.md")"
+  for w in 'reformat' 'rename' 're-comment' 'only what your own change made unused' 'pre-existing dead code' 'in the report'; do
+    printf '%s' "$r2" | grep -qiF -- "$w" || { echo "$w"; false; }
+  done
+  r6="$(grep '^6\. ' "$MK_REPO/agents/coder.md")"
+  printf '%s' "$r6" | grep -qF 'two readings' || { echo two; false; }
+  printf '%s' "$r6" | grep -qF 'NEEDS_DECISION' || { echo nd; false; }
+  printf '%s' "$r6" | grep -qF 'simpler way' || { echo simpler; false; }
+  printf '%s' "$r6" | grep -qF 'silently' || { echo silent; false; }
+  grep -qF -- '- `Assumptions:`' "$MK_REPO/agents/coder.md"
+  printf '%s' "$r2" | grep -qF 'makes wrong is part of the slice: update it' || { echo I1; false; }
+  printf '%s' "$r6" | grep -qF 'are not readings; make them and list them under `Assumptions:`' || { echo I2; false; }
+  grep -F -- '- `Assumptions:`' "$MK_REPO/agents/coder.md" | grep -qF 'choices the brief left to you' || { echo M3; false; }
+}
+@test "0.8.1 karpathy: reviewer check 2 traces every changed line to the slice" {
+  c2="$(grep '^2\. ' "$MK_REPO/agents/reviewer.md")"
+  for w in 'every changed line' 'formatting' 'comment' 'unrequested option' 'deleted pre-existing code the slice did not make unused' 'made wrong is in scope' 'REJECT' 'file:line'; do
+    printf '%s' "$c2" | grep -qiF -- "$w" || { echo "$w"; false; }
+  done
+}
+@test "0.8.1 verdicts: reviewer verdict model per finding (Part B goals 1-4, 6)" {
+  f="$MK_REPO/agents/reviewer.md"
+  for w in '"Severity requires impact."' '"Defense-in-depth gaps are `info`, not defects."' '"A claim about a file you did not read is not a finding."' '"Checklist deviations are not defects unless they break something measured."' '`confirmed`' '`needs_validation`' '`rejected`' 'Validate before merge' 'memokit-findings.sh validate' 'lower-trust principal' 'critical / high / medium / low / info' 'fully defeat an explicit control, or only weaken it'; do
+    grep -qF -- "$w" "$f" || { echo "$w"; false; }
+  done
+  grep -F 'Severity' "$f" | grep -qF 'only on `confirmed`' || { echo sev; false; }
+  grep -F 'REJECT' "$f" | grep -qF 'only when a `confirmed` finding must be fixed in the slice' || { echo rej; false; }
+  grep -F 'needs_validation' "$f" | grep -qF 'never reject on their own' || { echo nv; false; }
+  grep -F 'Checklist deviations' "$f" | grep -qiF 'scope creep' || { echo c2; false; }
+}
+@test "0.8.1 verdicts: ESCALATE omits the JSON block; Validate before merge is a report section" {
+  f="$MK_REPO/agents/reviewer.md"
+  grep -F 'ESCALATE' "$f" | grep -qF 'omit the JSON block' || { echo esc; false; }
+  grep -F 'Validate before merge' "$f" | grep -qF 'section heading' || { echo head; false; }
+  grep -F 'Validate before merge' "$f" | grep -qF 'finding id' || { echo id; false; }
+}

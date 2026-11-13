@@ -3,7 +3,7 @@ load helpers
 INIT() { "$MK_BASH" "$MK_REPO/skills/init/scripts/memokit-init.sh" "$@"; }
 GIT() { git -C "$PROJ" -c user.email=t@t -c user.name=t "$@"; }
 cfg_file() {
-  cfg="$(mktemp "${BATS_TMPDIR:-/tmp}/mkcfg.XXXXXX")"
+  cfg="$(mktemp "${MK_FIXTMP}/mkcfg.XXXXXX")"
   printf '%s' '{"version":1,"project":{"name":"Acme","tag":"ABC"},"language":"en","guardedDirs":["src","tests"]}' > "$cfg"
 }
 
@@ -17,7 +17,7 @@ cfg_file() {
   printf '#!/bin/sh\necho remind\n' > "$PROJ/scripts/remind.sh"
   printf '%s' '{"hooks":{"PostToolUse":[{"matcher":"Edit","hooks":[{"type":"command","command":"prettier --write ."}]}],"UserPromptSubmit":[{"hooks":[{"type":"command","command":"scripts/remind.sh"}]}]}}' > "$PROJ/.claude/settings.json"
   GIT add -A; GIT commit -qm fixture
-  cp "$PROJ/AGENTS.md" "$BATS_TMPDIR/agents.before"; cp "$PROJ/.cursor/rules/x.mdc" "$BATS_TMPDIR/x.before"
+  cp "$PROJ/AGENTS.md" "$BATS_TEST_TMPDIR/agents.before"; cp "$PROJ/.cursor/rules/x.mdc" "$BATS_TEST_TMPDIR/x.before"
   head_before="$(git -C "$PROJ" rev-parse HEAD)"
 
   run INIT inventory "$PROJ"; [ "$status" -eq 0 ]
@@ -37,8 +37,8 @@ cfg_file() {
   run INIT settings "$PROJ" --drop-hook UserPromptSubmit remind.sh; [ "$status" -eq 0 ]
   run INIT remove "$PROJ" .claude/agents/dev.md; [ "$status" -eq 0 ]
 
-  cmp "$PROJ/AGENTS.md" "$BATS_TMPDIR/agents.before"
-  cmp "$PROJ/.cursor/rules/x.mdc" "$BATS_TMPDIR/x.before"
+  cmp "$PROJ/AGENTS.md" "$BATS_TEST_TMPDIR/agents.before"
+  cmp "$PROJ/.cursor/rules/x.mdc" "$BATS_TEST_TMPDIR/x.before"
   jq -e '[.hooks.PostToolUse[].hooks[].command] | any(test("prettier"))' "$PROJ/.claude/settings.json"
   [ "$(jq '[.hooks.UserPromptSubmit[]?.hooks[]?.command] | any(test("remind.sh"))' "$PROJ/.claude/settings.json")" = false ]
   jq -e '.enabledPlugins == null and .extraKnownMarketplaces == null' "$PROJ/.claude/settings.json"   # Team said no: no registration

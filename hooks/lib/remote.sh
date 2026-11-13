@@ -866,10 +866,28 @@ _mk_rm_ok_k8s() {
 # name git remote prints in THAT directory (fix round 4: no URL, no path,
 # no implicit upstream).
 _mk_rm_ok_git() {
-  local x=$(($1 + 1)) remote dir
+  local x=$(($1 + 1)) remote dir eoo=0 skip=0
   while [ "$x" -lt "$n" ]; do
     case "${raw[x]}" in *'$'*) return 1 ;; esac
-    case "${bw[x]}" in --receive-pack*|--exec*|--upload-pack*|--repo*) return 1 ;; esac
+    if [ "$skip" -eq 1 ]; then
+      skip=0   # the value of -C / -o / --push-option: not judged as an option
+    elif [ "$eoo" -eq 1 ]; then
+      case "${bw[x]}" in :*|+:*) return 1 ;; esac
+    else
+      # 0.8.1: option ALLOWLIST (git accepts unambiguous long-option
+      # prefixes, so a denylist of --delete / --mirror / ... is bypassable)
+      case "${bw[x]}" in
+        --) eoo=1 ;;
+        -C) if [ "$x" -eq $(($1 + 1)) ]; then skip=1; else return 1; fi ;;
+        -o|--push-option) skip=1 ;;
+        -u|--set-upstream|-f|--force|--force-with-lease|--force-with-lease=*|--force-if-includes) ;;
+        -q|--quiet|-v|--verbose|-n|--dry-run|--tags|--follow-tags|--atomic) ;;
+        --no-verify|--progress|--no-progress|--porcelain|--push-option=*) ;;
+        -*[!uqvnf]*|-) return 1 ;;
+        -?*) ;;
+        :*|+:*) return 1 ;;
+      esac
+    fi
     x=$((x + 1))
   done
   x=$(($1 + 1))

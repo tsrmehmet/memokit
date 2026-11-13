@@ -1,0 +1,17 @@
+#!/bin/bash
+# Test stub for markitdown (tests/convert.bats). Usage as the real CLI:
+#   markitdown <file> -o <out>
+# MK_STUB_LOG: one line per call, then each argument on its own line.
+# MK_STUB_MODE: ok (default) writes MK_STUB_MD to <out>; fail exits 1;
+# sleep starts a child sleep, records the child's pid in MK_STUB_PID and
+# waits (the hook must kill the whole tree); hang does the same with TERM
+# ignored (the hook must follow up with KILL).
+{ printf 'call %s\n' "$#"; for a in "$@"; do printf 'arg[%s]\n' "$a"; done; } >> "${MK_STUB_LOG:-/dev/null}"
+out=""
+[ "${2:-}" = "-o" ] && out="${3:-}"
+case "${MK_STUB_MODE:-ok}" in
+  fail) echo "stub: conversion failed" >&2; exit 1 ;;
+  sleep) sleep 30 & printf '%s\n' "$!" > "${MK_STUB_PID:-/dev/null}"; wait; exit 0 ;;
+  hang) trap '' TERM; sleep 30 & printf '%s\n' "$!" > "${MK_STUB_PID:-/dev/null}"; wait; exit 0 ;;
+esac
+if [ -n "$out" ]; then printf '%s' "${MK_STUB_MD:-}" > "$out"; else printf '%s' "${MK_STUB_MD:-}"; fi

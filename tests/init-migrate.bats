@@ -75,7 +75,7 @@ INIT() { "$MK_BASH" "$MK_REPO/skills/init/scripts/memokit-init.sh" "$@"; }
   # step 5: CLAUDE.md edit
   printf '# Acme\n\nSee WORKING-MODEL.md.\n\n## Project notes\nkeep me\n' > "$PROJ/CLAUDE.md"
   # step 6: write-config, then remove-legacy
-  cfg="$(mktemp "${BATS_TMPDIR:-/tmp}/mkcfg.XXXXXX")"
+  cfg="$(mktemp "${MK_FIXTMP}/mkcfg.XXXXXX")"
   printf '%s' '{"version":1,"project":{"name":"Acme","tag":"ABC"},"language":"tr","guardedDirs":["src","tests","web"]}' > "$cfg"
   run INIT write-config "$PROJ" "$cfg"; [ "$status" -eq 0 ]
   run INIT remove-legacy "$PROJ"

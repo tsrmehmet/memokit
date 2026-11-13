@@ -6,6 +6,7 @@ load helpers
   grep -q '^name: triage$' "$MK_REPO/skills/triage/SKILL.md"
   grep -q '^name: sweep$' "$MK_REPO/skills/sweep/SKILL.md"
   grep -q '^name: parallel$' "$MK_REPO/skills/parallel/SKILL.md"
+  grep -q '^name: learn$' "$MK_REPO/skills/learn/SKILL.md"
 }
 @test "handoff verifies by measuring and uses the exact closing phrase" {
   f="$MK_REPO/skills/handoff/SKILL.md"
@@ -23,7 +24,7 @@ load helpers
 GATE_DESC='Only in projects that have .claude/memokit.json — '
 GATE_STEP='If `.claude/memokit.json` does not exist in the project root, stop'
 @test "handoff and resume are gated on .claude/memokit.json: description prefix and step 0 first" {
-  for s in handoff resume triage parallel; do
+  for s in handoff resume triage parallel learn; do
     f="$MK_REPO/skills/$s/SKILL.md"
     sed -n '/^---$/,/^---$/p' "$f" | grep -qF "description: $GATE_DESC" || { echo "$s: description not gated"; false; }
     g="$(grep -nF "$GATE_STEP" "$f" | head -n1 | cut -d: -f1)"
@@ -44,8 +45,23 @@ GATE_STEP='If `.claude/memokit.json` does not exist in the project root, stop'
     grep -qF "$s" "$f" || { echo "missing: $s"; false; }
   done
 }
+@test "triage: guidance mode answers a sourceless question from existing evidence only" {
+  f="$MK_REPO/skills/triage/SKILL.md"
+  for s in 'Guidance mode' 'question instead of a source' 'evidence already in the conversation or repo' \
+           'runs no tests' 'writes no file' 'Modes A and B need an explicit source'; do
+    grep -qF "$s" "$f" || { echo "missing: $s"; false; }
+  done
+  grep -qiE '^description:.*guidance' "$f"
+}
+@test "triage: a source wins even with a question; nothing at all asks; read-only look-ups count as present" {
+  f="$MK_REPO/skills/triage/SKILL.md"
+  for s in 'A source present (even with a question)' 'Nothing at all' 'ask what to triage' \
+           'read-only look-ups' 'no tests, builds or writes'; do
+    grep -qF "$s" "$f" || { echo "missing: $s"; false; }
+  done
+}
 handoff_add_line() { grep -E '^[[:space:]]*git add docs/' "$MK_REPO/skills/handoff/SKILL.md" | head -n1 | sed 's/^[[:space:]]*//'; }
-@test "handoff step 7 stages docs/ when .council/ is absent" {
+@test "handoff step 8 stages docs/ when .council/ is absent" {
   mk_project none
   line="$(handoff_add_line)"; [ -n "$line" ]
   echo change >> "$PROJ/docs/STATE.md"
@@ -53,7 +69,7 @@ handoff_add_line() { grep -E '^[[:space:]]*git add docs/' "$MK_REPO/skills/hando
   [ "$status" -eq 0 ] || { echo "rc=$status: $output"; false; }
   git -C "$PROJ" diff --cached --name-only | grep -qx 'docs/STATE.md'
 }
-@test "handoff step 7 stages docs/ and .council/ when both exist" {
+@test "handoff step 8 stages docs/ and .council/ when both exist" {
   mk_project none
   line="$(handoff_add_line)"
   mkdir -p "$PROJ/.council/q1"; echo s > "$PROJ/.council/q1/synthesis.md"; echo change >> "$PROJ/docs/STATE.md"
@@ -97,6 +113,26 @@ line_of() { grep -nF -- "$2" "$1" | head -n1 | cut -d: -f1; }
   grep -qF 'graphify' "$f"
   grep -qF 'memokit-graph.sh" refresh' "$f"
   grep -qF '.graphifyignore' "$f"
+}
+
+@test "0.8.1: init offers convert.markitdown only when markitdown is on PATH, else names the install command" {
+  f="$MK_REPO/skills/init/SKILL.md"
+  line="$(grep -F 'convert.markitdown' "$f" | head -1)"
+  for w in 'command -v markitdown' "uv tool install 'markitdown[pdf,docx,pptx,xlsx]'" 'the user runs' '"convert": {"markitdown": true}'; do
+    printf '%s' "$line" | grep -qF -- "$w" || { echo "missing: $w"; false; }
+  done
+  # Adopt mode asks the same questions.
+  grep -F 'questions of §1' "$f" | grep -qF 'markitdown'
+}
+
+@test "0.8.1: README documents the markitdown conversion" {
+  sec="$(awk '/^## PDF and Office files/{p=1;next} /^## /{p=0} p' "$MK_REPO/README.md")"
+  [ -n "$sec" ]
+  for w in 'convert.markitdown' "uv tool install 'markitdown[pdf,docx,pptx,xlsx]'" 'images' 'scanned' 'pages' 'pasted'; do
+    printf '%s' "$sec" | grep -qF -- "$w" || { echo "missing: $w"; false; }
+  done
+  grep -qF '`convert.markitdown`' "$MK_REPO/README.md"
+  awk '/^## Türkçe/{p=1} p' "$MK_REPO/README.md" | grep -qF 'markitdown'
 }
 
 @test "sweep is gated: description prefix and step 0 first" {
@@ -193,7 +229,7 @@ sweep_run() {
 }
 @test "memokit-temp.sh falls back to the newest transcript, from a subdirectory too" {
   mk_project; mk_temp_tree
-  FH="$(mktemp -d "${BATS_TMPDIR:-/tmp}/mkhome.XXXXXX")"
+  FH="$(mktemp -d "${MK_FIXTMP}/mkhome.XXXXXX")"
   slug="$(printf '%s' "$PROJ" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
   mkdir -p "$FH/projects/$slug" "$PROJ/src/deep" "$TROOT/claude-$TT_UID/$slug"
   A=00000001-aaaa-bbbb-cccc-000000000001; B=00000002-aaaa-bbbb-cccc-000000000002
@@ -373,7 +409,7 @@ has_all() { local f="$1" s; shift; for s in "$@"; do grep -qF -- "$s" "$f" || { 
   f="$MK_REPO/skills/handoff/SKILL.md"
   grep -qF '.claude/memokit/runs/*/ledger.md' "$f"
   grep -qF 'run id' "$f"
-  grep -qF 'finish or stop cleanly' "$f"
+  grep -qF 'wait for the agents that are running' "$f"; grep -qF 'run no queued merge' "$f"
   grep -qF 'never remove a worktree or branch' "$f"
   grep -qF 'never run Tier 2' "$f"
   grep -qF 'before the STATE commit' "$f"
@@ -516,4 +552,85 @@ has_all() { local f="$1" s; shift; for s in "$@"; do grep -qF -- "$s" "$f" || { 
   l="$(grep -F '`docsSite` non-null' "$MK_REPO/skills/init/SKILL.md")"
   for w in 'relative to `docs/`' 'keep all default patterns' 'build the site'; do printf '%s' "$l" | grep -qF "$w" || { echo "$w"; false; }; done
   grep -F 'lists only personal files' "$MK_REPO/skills/init/SKILL.md" | grep -qF '`unknown`'
+}
+@test "0.8.1: resume proposes /memokit:parallel for two or more tasks, talk-first first, no analyst" {
+  f="$MK_REPO/skills/resume/SKILL.md"
+  has_all "$f" '/memokit:parallel' 'two or more' '`parallel.auto: true`' 'does not dispatch an analyst' '`parallel.maxCoders`'
+  s="$(sed -n '/^2\. /,/^3\. /p' "$f")"
+  printf '%s' "$s" | grep -qF 'TALK FIRST'
+  [ "$(printf '%s\n' "$s" | grep -n 'TALK FIRST' | head -1 | cut -d: -f1)" -lt "$(printf '%s\n' "$s" | grep -n 'two or more' | head -1 | cut -d: -f1)" ]
+  grep -F '6. **Confirm' "$f" | grep -qF '/memokit:parallel'
+}
+@test "0.8.1: parallel records ready/started/merged times, a Measurements block, and the single-lane sentence" {
+  has_all "$PAR" '`ready at`' '`started at`' '`merged at`' '`## Measurements`' 'maxCoders recommendation:' 'decision bandwidth' 'weekly quota' 'continue as a single lane'
+  grep -F '## Measurements' "$PAR" | grep -qF 'docs/STATE.md'
+}
+@test "0.8.1 fix: resume proposal follows the active-run paragraph; conditions, auto timing" {
+  f="$MK_REPO/skills/resume/SKILL.md"
+  a="$(grep -n '\*\*Active parallel run' "$f" | head -1 | cut -d: -f1)"; p="$(grep -n '\*\*Parallel proposal' "$f" | head -1 | cut -d: -f1)"
+  [ "$a" -lt "$p" ]
+  l="$(grep -F '**Parallel proposal' "$f")"
+  for w in 'no run is active' 'maxCoders' 'talk-first' 'the announcement and the start happen at step 6' 'steps 3–5' 'replaces step 7'; do printf '%s' "$l" | grep -qF -- "$w" || { echo "$w"; false; }; done
+}
+@test "0.8.1 fix: ledger stamps are defined by event; Measurements has a template" {
+  has_all "$PAR" 'the task reached `decided` and every task it depends on is merged' "the lane's first \`running\`" 'the `merged` state' 'ISO-8601 local time to the minute' '`lane | slot wait | wall time`' 'total: <first started → last merged>' 'maxCoders recommendation: keep|raise|lower N' 'replace the block, never append' '30 minutes'
+}
+@test "handoff pre-check: live background work is listed first, waited for, never stopped (0.8.1)" {
+  f="$MK_REPO/skills/handoff/SKILL.md"
+  p="$(grep -n 'Live background work' "$f" | head -n1 | cut -d: -f1)"
+  c="$(grep -n 'Collect what changed' "$f" | head -n1 | cut -d: -f1)"
+  [ -n "$p" ] && [ -n "$c" ] && [ "$p" -lt "$c" ] || { echo "pre-check not before collect"; false; }
+  grep -nE '^1\. \*\*Live background work' "$f"
+  grep -qE '^2\. \*\*Collect what changed' "$f"
+  grep -qF 'never stopped' "$f"
+  run grep -F 'TaskStop' "$f"; [ "$status" -ne 0 ]
+  run grep -F 'finish or stop cleanly' "$f"; [ "$status" -ne 0 ]
+  grep -qF 'finish or stop cleanly' "$PAR"
+  grep -E '^12\. ' "$PAR" | grep -qF 'finish or stop cleanly'
+  grep -qF 'folded into STATE' "$f"
+  grep -qF 'restart next session' "$f"
+  grep -qF '30 minutes' "$f"
+  grep -qF 'NEEDS_DECISION' "$f"; grep -qF 'BLOCKED' "$f"
+  grep -qF 'TALK FIRST' "$f"
+  grep -qF 'ListAgents' "$f"
+  grep -qF 'live background agents or self-ending shells left?' "$f"
+}
+
+# --- 0.8.1 Part B (goals 5-7): findings model in /memokit:parallel -----------
+@test "parallel: validating state sits between in-review and approved and counts as running" {
+  has_all "$PAR" '`validating`' 'between `in-review` and `approved`' 'counts as running'
+}
+@test "parallel: the findings validator runs on every review report; invalid is REJECT: malformed review, one re-run" {
+  has_all "$PAR" '${CLAUDE_PLUGIN_ROOT}/skills/parallel/scripts/memokit-findings.sh' 'validate <report file>' \
+    'REJECT: malformed review' 'once'
+}
+@test "parallel: needs_validation items are measured by the orchestrator or an instrumentation slice before the merge queue" {
+  has_all "$PAR" 'needs_validation' 'read-only command' 'instrumentation slice' 'every item is measured' \
+    'reopens the lane with a fix slice' 'closes it' 'explicitly defers' 'ledger and `docs/STATE.md`'
+}
+@test "parallel: review.validate dispatches a second reviewer that only tries to refute" {
+  has_all "$PAR" 'review.validate' '`high`' '`always`' '`never`' 'second reviewer' 'only the findings JSON and the diff' \
+    'try to refute each finding; you did not hunt them' 'verdict per finding id' 'marks `rejected` are dropped' \
+    'without a coder round' 'ESCALATE` is unaffected'
+}
+
+@test "parallel (fix r1): APPROVE with open needs_validation goes to validating first" {
+  has_all "$PAR" '`APPROVE` with open `needs_validation` items → state `validating` first' \
+    'only when every item is measured or user-deferred'
+}
+@test "parallel (fix r1): second reviewer leaves only surviving findings for the fix round" {
+  has_all "$PAR" '<lane>-<task>-surviving-r<n>.json' 'surviving findings only' 'original report path as context only' \
+    'returns as `needs_validation` goes to that measurement path, not the fix round'
+}
+@test "parallel (fix r1): malformed-review re-run, round counting, call problems" {
+  has_all "$PAR" 'dispatch a new reviewer with the same brief plus the validator'"'"'s error message' \
+    'counts as a review round in the ledger' 'the lane stays `in-review`' 'Exit 2, a missing `jq` or an unreadable report file is a call problem'
+}
+@test "parallel (fix r1): closing rules, instrumentation review, deferral counts as running" {
+  has_all "$PAR" '`rejected` closes it (that item)' 'no fix slice is pending, the lane goes to `approved`' \
+    'reviewed like any slice' 'waits only on a user deferral counts as running, like `needs-decision`'
+}
+@test "parallel (fix r1): second reviewer slot, report file, ledger, order" {
+  has_all "$PAR" 'uses a `maxReviewers` slot' '<lane>-<task>-reviewer2-r<n>.md' 'Log its dispatch and each id'"'"'s verdict in the ledger' \
+    'second-reviewer refutation, then the fix round, then measure the remaining items on the final review'
 }

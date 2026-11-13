@@ -35,29 +35,21 @@ SESSION="$(printf '%s' "$PAYLOAD" | jq -r '.session_id // "unknown"' 2>/dev/null
 SESSION="$(printf '%s' "$SESSION" | tr -c 'A-Za-z0-9_-' _)"
 [ -z "$SESSION" ] && SESSION="unknown"
 
-# Context size = what was actually sent last turn. output_tokens is deliberately
-# excluded: it is not part of the request, it lands in the NEXT turn's input.
-# Only the tail is scanned -- transcripts reach many MB and this runs every turn.
+# Context size = what was actually sent last turn (input + cache read + cache
+# creation of the last usage record; output_tokens lands in the NEXT turn's
+# input). Only the tail is scanned -- transcripts reach many MB and this runs
+# every turn.
 #
 # Round 6 merge-gate audit fix (Finding 4, confirmed): this used to be a
-# single `jq -s` over the raw tail, which parses the WHOLE selected slice as
-# one JSON document stream in one pass. A Stop hook races the transcript
-# writer, so the last line can be half-written (truncated mid-write) at the
-# exact moment this runs. `jq -s` then fails on the batch as a whole (exit 5,
-# "unexpected end of input"), `2>/dev/null` swallows the error text, USED
-# ends up empty, and `case "" in ''|...) exit 0` below exits silently --
-# the budget warning never fires, with no trace of why. Reproduced.
-# Fix: parse line-by-line first (`jq -R 'fromjson? // empty'`), so a single
-# malformed line (normally just the in-progress last one) is DROPPED instead
-# of poisoning the whole batch, then feed only the surviving well-formed
-# objects into the same aggregation as before. `fromjson?` is jq's
-# try-operator: a line that fails to parse produces no output for itself
-# ("`// empty`") instead of aborting the pipeline.
-USED="$(tail -500 "$TRANSCRIPT" 2>/dev/null \
-  | jq -R 'fromjson? // empty' 2>/dev/null \
-  | jq -s '[.[] | select(.message.usage)] | last | .message.usage
-           | ((.input_tokens // 0) + (.cache_read_input_tokens // 0)
-              + (.cache_creation_input_tokens // 0))' 2>/dev/null)"
+# single `jq -s` over the raw tail. A Stop hook races the transcript writer,
+# so the last line can be half-written at the exact moment this runs; `jq -s`
+# then failed on the whole batch, USED ended up empty and the warning never
+# fired. The parsing now lives in lib/transcript.sh (shared with the handoff
+# stats and /memokit:learn): line by line, a malformed line is dropped
+# instead of poisoning the batch. Its header records the transcript shapes.
+# shellcheck source-path=SCRIPTDIR source=lib/transcript.sh
+. "$(dirname "$0")/lib/transcript.sh"
+USED="$(mk_tr_context_used "$TRANSCRIPT" 500)"
 
 # No usable reading -> stay silent. A false alarm is worse than a missed one.
 case "$USED" in ''|null|*[!0-9]*) exit 0 ;; esac

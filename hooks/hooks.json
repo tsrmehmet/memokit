@@ -9,6 +9,7 @@
       { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/inject-rules.sh\"", "timeout": 5 } ] }
     ],
     "PreToolUse": [
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-integrity.sh\"", "timeout": 5 } ] },
       { "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
         "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/guard-edit.sh\"", "timeout": 5 } ] },
       { "matcher": "Bash|Agent|Task|SendMessage|Edit|Write|MultiEdit|NotebookEdit",
@@ -16,15 +17,25 @@
       { "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/guard-destructive.sh\"", "timeout": 5 } ] },
       { "matcher": "Bash",
-        "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-disk.sh\"", "timeout": 5 } ] }
+        "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-disk.sh\"", "timeout": 5 } ] },
+      { "matcher": "Read",
+        "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/convert-read.sh\"", "timeout": 60 } ] }
+    ],
+    "PermissionRequest": [
+      { "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit|Read|WebFetch",
+        "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/record-permission.sh\"", "timeout": 5 } ] }
     ],
     "PostToolUse": [
+      { "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-integrity.sh\"", "timeout": 5 } ] },
       { "matcher": "Bash",
         "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-disk.sh\"", "timeout": 5 } ] },
       { "matcher": "Bash",
         "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/close-window.sh\"", "timeout": 5 } ] }
     ],
     "PostToolUseFailure": [
+      { "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-integrity.sh\"", "timeout": 5 } ] },
       { "matcher": "Bash",
         "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-disk.sh\"", "timeout": 5 } ] },
       { "matcher": "Bash",
@@ -38,7 +49,8 @@
     ],
     "SubagentStop": [
       { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-subagent-background.sh\"", "timeout": 5 } ] },
-      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-subagent-scratch.sh\"", "timeout": 10 } ] }
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-subagent-scratch.sh\"", "timeout": 10 } ] },
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-integrity.sh\"", "timeout": 5 } ] }
     ],
     "PreCompact": [
       { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/precompact-handoff.sh\"", "timeout": 5 } ] }

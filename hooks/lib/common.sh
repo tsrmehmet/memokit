@@ -9,6 +9,7 @@ MK_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MK_HOOKS_DIR="$(cd "$MK_LIB_DIR/.." && pwd)"
 MK_ROOT=""
 MK_CONFIG=""
+MK_CONFIG_LIVE=""
 MK_TAG="MEMOKIT"
 MK_LANG="en"
 
@@ -49,10 +50,54 @@ mk_resolve_root() {
       MK_ROOT="$top"
     fi
   fi
-  MK_CONFIG="${MK_ROOT:+$MK_ROOT/.claude/memokit.json}"
+  MK_CONFIG_LIVE="${MK_ROOT:+$MK_ROOT/.claude/memokit.json}"
+  MK_CONFIG="$MK_CONFIG_LIVE"
+  _mk_config_pick "${1:-}"
 }
 
-mk_active() { [ -n "$MK_ROOT" ] && [ -f "$MK_CONFIG" ]; }
+# _mk_config_pick PAYLOAD -- MK_CONFIG becomes this session's config snapshot
+# (session-start.sh, mk_config_snapshot_write) when the payload is a
+# subagent's (non-empty agent_id), the live file exists and the snapshot is a
+# regular file, not a symlink, owned by the user. Anything else keeps the
+# live file: the main session, no snapshot, a deleted live config (which
+# mk_config_vanished denies as in 0.8.0). One jq call, only while the live
+# file exists and the payload holds the text "agent_id" (one bash regex
+# test, no fork: the main session's usual payload skips the jq). The test
+# runs under LC_ALL=C: in a UTF-8 locale bash 3.2's regexec finds no match
+# in a text holding an invalid byte anywhere.
+_mk_config_pick() {
+  local LC_ALL=C
+  local out f re='"agent_id"' nl='
+'
+  [ -n "$MK_CONFIG_LIVE" ] && [ -f "$MK_CONFIG_LIVE" ] || return 0
+  [[ $1 =~ $re ]] || return 0
+  out="$(printf '%s' "$1" | jq -r '(if (.agent_id // "") != "" then "sub" else "main" end), (.session_id // "unknown")' 2>/dev/null)" || return 0
+  case "$out" in "sub$nl"*) ;; *) return 0 ;; esac
+  f="$(_mk_session_tmp config "${out#"sub$nl"}")"
+  if [ -f "$f" ] && [ ! -L "$f" ] && [ -O "$f" ]; then MK_CONFIG="$f"; fi
+  return 0
+}
+
+mk_active() { [ -n "$MK_ROOT" ] && [ -f "$MK_CONFIG_LIVE" ]; }
+
+# _mk_session_tmp KIND SID -- this project's per-session state file
+# careful-KIND-<SID>, SID sanitised to [A-Za-z0-9_-] ("unknown" when empty).
+_mk_session_tmp() {
+  mk_tmp "careful-$1-$(printf '%s' "${2:-unknown}" | tr -c 'A-Za-z0-9_-' _)"
+}
+# _mk_state_write FILE -- stdin to FILE with the safe writer: never through a
+# symlink or over a foreign or non-regular file; atomic (mktemp + mv, umask
+# 077).
+_mk_state_write() {
+  local f="$1" tmp
+  case "$f" in /?*) ;; *) return 1 ;; esac
+  [ -L "$f" ] && return 1
+  if [ -e "$f" ]; then { [ -f "$f" ] && [ -O "$f" ]; } || return 1; fi
+  tmp="$( umask 077; mktemp "$f.XXXXXX" 2>/dev/null )" || return 1
+  [ -n "$tmp" ] || return 1
+  cat > "$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
+}
 
 # Active marker: session-start.sh (main session) writes it when memokit is
 # active, so a config that vanishes mid-session (every hook gates on
@@ -61,20 +106,27 @@ mk_active() { [ -n "$MK_ROOT" ] && [ -f "$MK_CONFIG" ]; }
 mk_active_marker_file() {
   local sid
   sid="$(printf '%s' "$1" | jq -r '.session_id // "unknown"' 2>/dev/null)"
-  mk_tmp "careful-active-$(printf '%s' "${sid:-unknown}" | tr -c 'A-Za-z0-9_-' _)"
+  _mk_session_tmp active "$sid"
 }
-# mk_active_marker_write PAYLOAD -- safe writer: never through a symlink or
-# over a foreign file; atomic (mktemp + mv, umask 077).
+# mk_active_marker_write PAYLOAD -- safe writer (_mk_state_write).
 mk_active_marker_write() {
-  local f tmp
-  f="$(mk_active_marker_file "$1")"
-  case "$f" in /?*) ;; *) return 1 ;; esac
-  [ -L "$f" ] && return 1
-  if [ -e "$f" ]; then { [ -f "$f" ] && [ -O "$f" ]; } || return 1; fi
-  tmp="$( umask 077; mktemp "$f.XXXXXX" 2>/dev/null )" || return 1
-  [ -n "$tmp" ] || return 1
-  printf 'active\n' > "$tmp" || { rm -f "$tmp"; return 1; }
-  mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
+  printf 'active\n' | _mk_state_write "$(mk_active_marker_file "$1")"
+}
+# Config snapshot (0.8.1): session-start.sh copies the validated live config
+# here on startup, resume and clear (not compact); subagent payloads read it
+# (_mk_config_pick). Named careful-config-<session>: careful-state, so a
+# command naming it is denied, and guard-subagent-authority.sh Rule 2a denies
+# the file tools on it.
+mk_config_snapshot_file() {
+  local sid
+  sid="$(printf '%s' "$1" | jq -r '.session_id // "unknown"' 2>/dev/null)"
+  _mk_session_tmp config "$sid"
+}
+# mk_config_snapshot_write PAYLOAD -- copies MK_CONFIG_LIVE with the safe
+# writer; exit 1 on any refusal.
+mk_config_snapshot_write() {
+  [ -n "$MK_CONFIG_LIVE" ] && [ -f "$MK_CONFIG_LIVE" ] || return 1
+  _mk_state_write "$(mk_config_snapshot_file "$1")" < "$MK_CONFIG_LIVE"
 }
 # mk_config_vanished PAYLOAD -- true when memokit is not active now, this
 # session's marker says it was, and the payload is a subagent (agent_id) using
@@ -100,6 +152,17 @@ mk_path_inside_root() {
   dirp="$(CDPATH='' cd -- "$MK_ROOT" && CDPATH='' cd -- "$(dirname -- "$1")" 2>/dev/null && pwd -P)" || return 1
   case "$dirp/" in "$rootp"/*) return 0 ;; esac
   return 1
+}
+
+# mk_config_invalid_msg -- the deny text for a config mk_load_config refused:
+# CONFIG_SNAPSHOT_INVALID when MK_CONFIG is this session's snapshot (a
+# subagent payload), CONFIG_INVALID otherwise.
+mk_config_invalid_msg() {
+  if [ "$MK_CONFIG" != "$MK_CONFIG_LIVE" ]; then
+    mk_msg CONFIG_SNAPSHOT_INVALID "$MK_CONFIG_ERR"
+  else
+    mk_msg CONFIG_INVALID "$MK_CONFIG_ERR"
+  fi
 }
 
 mk_lang_guess() {
@@ -130,7 +193,7 @@ tests"; MK_CONTEXT_LIMIT=300000; MK_STATE_MAX_BEHIND=3
   MK_REMOTE_WINDOW_MIN=30; MK_REMOTE_RUNBOOKS_DIR=".claude/memokit/runbooks"; MK_REMOTE_LOG="docs/DEPLOYS.md"
   MK_SCRATCH_AGENT_MAX_MB=1024; MK_SCRATCH_STALE_HOURS=24; MK_SCRATCH_REPORT_MIN_MB=500
   MK_DISK_MIN_FREE_GB=30; MK_DISK_DROP_WARN_GB=10
-  MK_PARALLEL_MAX_CODERS=3; MK_PARALLEL_MAX_REVIEWERS=3; MK_REVIEW_MODEL="auto"
+  MK_PARALLEL_MAX_CODERS=3; MK_PARALLEL_MAX_REVIEWERS=3; MK_REVIEW_MODEL="auto"; MK_CONVERT_MARKITDOWN=0
   MK_HINTS_BUILTIN="debugging decision review handoff resume graphify"
   if ! command -v jq >/dev/null 2>&1; then
     MK_CONFIG_ERR="jq"; MK_LANG="$(mk_lang_guess)"; mk_load_messages "$MK_LANG"; return 1
