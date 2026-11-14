@@ -36,7 +36,10 @@ copy of small settings files, one digest line per protected file:
 name; Post and SubagentStop compare. A change leaves a marker the subagent
 block, the one-time main-session deny and the prompt notice each consume.
 It restores nothing. The header lists every state file and the plugin scope
-rules (`--plugin-dir` project exemption); `budget.sh` arms it with
+rules (`--plugin-dir` project exemption). A permission record binds a link
+(stamp before, stamp after), so prompted changes made by parallel calls inside
+one outer call chain into a notice; the record lock's stale takeover is
+serialised and a lock owned by another user fails at once. `budget.sh` arms it with
 `MK_BUDGET_EVENT` so a timeout on Post is a reported change.
 `worktrees.sh` (leftover worktrees under `.claude/worktrees/` and `mk/*`
 branches) is sourced after `common.sh` by `session-start.sh` (`mk_wt_count`)
@@ -168,7 +171,13 @@ computed `memokit-`/`careful-` word while naming a temp location, is
 `careful-state`, never approvable (a computed write without a temp location
 is `careful-state-glob`, approvable with a code). The markitdown cache
 (`careful-convert`, a directory; `convert-read.sh`) is in the same family:
-named in a Bash command it is `careful-state`, and a subagent file-tool
+named in a Bash command it is `careful-state` for a subagent; in the main
+session (`MK_CF_SESSION_MAIN=1`, set by `guard-destructive.sh`) the bare word
+is prose and passes unless the command also holds a `$`, a backquote,
+`memokit-`, the word `tmpdir` (any case) or `/tmp/`, `/private/tmp/`,
+`/var/folders/` (a bare `/tmp` word does not count). `MK_CF_STATE_MAIN_RE` only
+drops the bare word; the co-occurrence is `_mk_cf_cooc`, two linear greps
+(never a `.*` alternation, which is quadratic on a long line). A subagent file-tool
 write anywhere below it is denied (`guard-subagent-authority.sh`).
 Considered and rejected: HMAC on state files. A secret that hooks can read
 is readable by the model's own Bash under the same user, so a keyed hash

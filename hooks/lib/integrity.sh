@@ -391,7 +391,7 @@ EOF
   printf '%s\n' "$out" | LC_ALL=C tr -d '\000-\011\013-\037\177'
 }
 
-# mk_integrity_perm_ok RULES PERMFILE PRE_T POST_T DIGEST -- exit 0 only when every
+# mk_integrity_perm_ok RULES PERMFILE PRE_T POST_T DIGEST PRE_DG -- exit 0 only when every
 # "<path>|<rule>" line of RULES (mk_integrity_allow_only) is backed by a real
 # permission prompt during this call: a line of the permission record
 # PERMFILE (careful-integrity-perm-<sid>, written by record-permission.sh on
@@ -406,11 +406,19 @@ EOF
 # runs. Anything uncertain (no record, a record that is not ours, no PRE_T or
 # POST_T, a line that does not parse, jq missing) is exit 1: the full alert.
 # A record backs every call whose window holds it, but only for one change:
-# when first used it is bound ("s") to the settings file's stamp after the
-# change (its line in DIGEST, this Post's digest), and a later Post may use
-# it only when its own stamp of that file is the same (two parallel calls of
-# agents both see the one change; a second edit, or the rule removed and
-# added again, has another stamp: the full alert). A record expires 10
+# when first used it is bound to a link of the settings file's stamps, "f"
+# -> "s" ("s": its stamp after the change, its line in DIGEST, this Post's
+# digest; "f": the stamp the walk below had reached). A Post (PRE_DG is the
+# digest of its PreToolUse) starts at its own Pre stamp of the file and
+# follows bound links whose "f" is where it stands; the added rules those
+# links do not cover each need an unbound record, which is bound from the
+# stamp reached to this Post's stamp. Accepted only when the chain reaches
+# this Post's stamp, every added rule is covered, and no stamp has two links
+# to different stamps (a branch). So two parallel calls inside one outer call
+# chain (Y: P->S1, Z: S1->S2, X walks both); a second edit, or the rule
+# removed and added again, gives a stamp no link starts from: the full
+# alert. A record with only "s" (0.8.1) backs the Post whose stamp it is,
+# as before. A record expires 10
 # minutes after its time: it backs nothing, and expired lines are pruned on
 # read. PERMFILE is rewritten (safe writer, from the snapshot jq read) only
 # when lines expired or a record was bound; a binding that cannot be written
@@ -459,26 +467,49 @@ mk_integrity_perm_ok() {
 }
 
 # _mk_ig_lock FILE -- takes FILE.lock (mkdir): 10 tries 100 ms apart (about
-# 1 s); a lock older than 30 s (its holder died) is removed once. Exit 1
-# when not taken. While the lock is there only the sleep forks (mkdir runs
-# when it is gone): a held lock cost 40 forks with 20 tries, and on a CI
-# runner with slow forks that wait used up the hook's 3.3 s budget.
+# 1 s). Exit 1 when not taken. While the lock is there only the sleep forks
+# (mkdir runs when it is gone): a held lock cost 40 forks with 20 tries, and
+# on a CI runner with slow forks that wait used up the hook's 3.3 s budget.
+# A lock owned by another user fails at once (we cannot remove it, and it
+# is not ours to wait for: the caller gives the full alert, never fail-open).
+# A lock older than 30 s (its holder died) is taken over once, on the first
+# try: takers are serialised by a second mkdir mutex FILE.lock.t, and the
+# age is read again under it, so a taker that judged the lock stale before
+# another one replaced it cannot remove the fresh one. A live holder is
+# never older than 30 s. A FILE.lock.t older than 30 s (its taker died) is
+# removed the same way; the second-order race there is accepted.
 _mk_ig_lock() {
-  local l="$1.lock" i=0 m n
+  local l="$1.lock" i=0
   while [ "$i" -lt 10 ]; do
     if [ ! -e "$l" ] && [ ! -L "$l" ]; then mkdir "$l" 2>/dev/null && return 0; fi
     if [ "$i" = 0 ] && [ -d "$l" ] && [ ! -L "$l" ]; then
-      case "${OSTYPE:-}" in
-        darwin*|*bsd*) m="$(stat -f %m "$l" 2>/dev/null)" ;;
-        *) m="$(stat -c %Y "$l" 2>/dev/null)" ;;
-      esac
-      n="$(date +%s)"
-      case "$m$n" in *[!0-9]*|'') ;; *) [ $((n - m)) -le 30 ] || rmdir "$l" 2>/dev/null ;; esac
+      [ -O "$l" ] || return 1
+      if _mk_ig_old "$l"; then
+        if mkdir "$l.t" 2>/dev/null; then
+          _mk_ig_old "$l" && rmdir "$l" 2>/dev/null
+          rmdir "$l.t" 2>/dev/null
+        elif [ -d "$l.t" ] && [ ! -L "$l.t" ] && [ -O "$l.t" ] && _mk_ig_old "$l.t"; then
+          rmdir "$l.t" 2>/dev/null
+        fi
+      fi
     fi
     i=$((i + 1))
     sleep 0.1
   done
   return 1
+}
+
+# _mk_ig_old DIR -- 0 when DIR's mtime is more than 30 s old.
+_mk_ig_old() {
+  local m n
+  case "${OSTYPE:-}" in
+    darwin*|*bsd*) m="$(stat -f %m "$1" 2>/dev/null)" ;;
+    *) m="$(stat -c %Y "$1" 2>/dev/null)" ;;
+  esac
+  n="$(date +%s)"
+  case "$m" in ''|*[!0-9]*) return 1 ;; esac
+  case "$n" in ''|*[!0-9]*) return 1 ;; esac
+  [ $((n - m)) -gt 30 ]
 }
 
 # _mk_ig_perm_ok -- mk_integrity_perm_ok's work, under the lock.
@@ -489,7 +520,7 @@ _mk_ig_perm_ok() {
   # No record of ours: no rule is backed, but a "full" rule still says so.
   { [ -f "$ev" ] && [ ! -L "$ev" ] && [ -O "$ev" ]; } || ev=/dev/null
   if [ -z "$pr" ]; then pr="${MK_HOOKS_DIR%/*}"; pr="${pr:-/}"; fi
-  out="$(printf '%s' "$1" | jq -Rrs --rawfile ev "$ev" --arg pt "${3:-}" --arg ut "${4:-}" --arg dg "${5:-}" \
+  out="$(printf '%s' "$1" | jq -Rrs --rawfile ev "$ev" --arg pt "${3:-}" --arg ut "${4:-}" --arg dg "${5:-}" --arg pg "${6:-}" \
       --arg root "$MK_ROOT" --arg home "${HOME:-}" --arg ccd "${CLAUDE_CONFIG_DIR:-}" --arg plug "$pr" '
     def bashbroad($c):
       ($c | sub(":\\*$"; "")) as $cmd
@@ -508,6 +539,17 @@ _mk_ig_perm_ok() {
               and ($x.c | contains("*"))) then "broad"
         elif $x.t == "Bash" and bashbroad($x.c) then "broad"
         else "narrow" end;
+    # chain: from the Pre stamp, follow bound links (f == cur); two links
+    # leaving one stamp for different stamps are a branch (br).
+    def chain($links; $pre; $sp):
+      reduce range(0; 65) as $_ ({cur: $pre, cov: [], br: false, d: false};
+        if .d or .cur == $sp then .d = true
+        else . as $st
+          | [ $links[] | select(.v.f == $st.cur) ] as $n
+          | if ($n | length) == 0 then .d = true
+            elif ([$n[].v.s] | unique | length) > 1 then .br = true | .d = true
+            else .cur = $n[0].v.s | .cov += [$n[].i] end
+        end);
     ([".claude", "settings", "memokit", "plugins", ($ccd | ascii_downcase), ($plug | ascii_downcase)]
      | map(select(. != "" and . != "/"))) as $deny
     | (try ($pt | tonumber) catch null) as $T
@@ -518,6 +560,7 @@ _mk_ig_perm_ok() {
     | [ $L[] | select(.v | type == "object") | select((.v.t | type) == "number" and .v.t > $X) ] as $E
     | [ $L[] | select((.v | type) == "object" and (.v.t | type) == "number" and .v.t <= $X) ] as $old
     | ([ $dg | split("\n")[] | capture("^(?<p>.*) (?<s>[^ ]*)$")? | {(.p): .s} ] | add // {}) as $S
+    | ([ $pg | split("\n")[] | capture("^(?<p>.*) (?<s>[^ ]*)$")? | {(.p): .s} ] | add // {}) as $P0
     | ([ {p: ($root + "/.claude/settings.local.json"), dest: "localSettings"},
          {p: ($root + "/.claude/settings.json"), dest: "projectSettings"} ]
        + (if $home != "" then [{p: ($home + "/.claude/settings.json"), dest: "userSettings"}] else [] end)
@@ -527,27 +570,36 @@ _mk_ig_perm_ok() {
            // ($l | capture("^(?<p>[^|]*)").p)) as $p
         | ($l | .[($p | length) + 1:]) as $rule
         | ($S[$p] // null) as $sp
-        | {l: $l, c: class($rule; $deny), s: $sp,
-           i: (if $sp == null then null else
-               ([ $map[] | . as $m | select($m.p == $p)
-                  | $E[] | select((.v.t | type) == "number" and .v.t > $T and .v.t <= $U
-                                  and .v.dest == $m.dest and .v.rule == $rule
-                                  and ((.v.s // null) == null or .v.s == $sp))
-                  | .i ][0]) end)} ]
+        | ([ $map[] | select(.p == $p) | .dest ][0] // null) as $dest
+        | {l: $l, c: class($rule; $deny), s: $sp, p: $p,
+           x: (if $sp == null or $dest == null then null else
+               ([ $E[] | select(.v.dest == $dest and .v.t > $T and .v.t <= $U) ]) as $W
+               | chain([ $W[] | select((.v.f | type) == "string" and (.v.s | type) == "string") ];
+                       ($P0[$p] // "-"); $sp) as $w
+               | if $w.br then null else
+                 ([ $W[] | select(.v.rule == $rule) ]) as $c
+                 | {cur: $w.cur,
+                    h: ([ $c[] | select(. as $e | $w.cov | index($e.i) != null)
+                          | {i, k: "L"} ][0]
+                        // [ $c[] | select((.v.f // null) == null and .v.s == $sp) | {i, k: "G"} ][0]
+                        // (if $w.cur == $sp then null else
+                              [ $c[] | select((.v.s // null) == null) | {i, k: "U"} ][0] end))} end end)}
+        | .i = (.x.h.i // null) | .k = (.x.h.k // null) | .f = (.x.cur // null) ]
     | . as $r
     | (if any($r[]; .c == "full") then "FULL"
-       elif $T != null and $U != null and ($r | length) > 0 and all($r[]; .i != null) then "OK"
+       elif $T != null and $U != null and ($r | length) > 0 and all($r[]; .i != null)
+            and all($r[]; . as $x | $x.f == $x.s or any($r[]; .p == $x.p and .k != "L")) then "OK"
        else "NO" end) as $st
-    | (if $st == "OK" then [ $r[] | {i, s} ] else [] end) as $bind
+    | (if $st == "OK" then [ $r[] | {i, s, f} ] else [] end) as $bind
     | ([ $bind[] | .i as $k | $E[] | select(.i == $k and (.v.s // null) == null) ] | length > 0) as $nb
     | $st,
       (if $st == "OK" then ($r[] | (if .c == "broad" then "B" else "N" end) + .l) else empty end),
       (if $nb then "Y" else empty end),
       (if ($old | length) > 0 or $nb
        then "X", ($L[] | select(.i as $k | any($old[]; .i == $k) | not)
-                  | . as $e | ([ $bind[] | select(.i == $e.i) | .s ][0]) as $s
-                  | "R" + (if $s == null then $e.s
-                           elif ($e.v.s // null) == null then ($e.v + {s: $s} | tojson)
+                  | . as $e | ([ $bind[] | select(.i == $e.i) ][0]) as $b
+                  | "R" + (if $b == null then $e.s
+                           elif ($e.v.s // null) == null then ($e.v + {s: $b.s, f: $b.f} | tojson)
                            else $e.s end))
        else empty end)' 2>/dev/null)" || return 1
   # The added rules and at most 64 record lines: a bounded read loop.

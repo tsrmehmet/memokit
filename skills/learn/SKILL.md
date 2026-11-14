@@ -22,7 +22,7 @@ Goal: what went wrong more than once in this session (the user corrected you, a 
    It prints one JSON object with four lists:
    - `denies` — PreToolUse hook denies: `label` (e.g. `[TAG-CAREFUL] rm-recursive`), `count`, `first` command or path;
    - `errors` — tool errors that were not a deny or a rejection: `tool`, `count`, `first` error line;
-   - `corrections` — user messages whose first line starts with a correction word (tr `hayır|yanlış|yapma|değil|olmaz|dur`, en `no|wrong|don't|stop|not that`): `user` line and the `assistant` line that followed;
+   - `corrections` — human messages (typed or queued while Claude worked) that contain a correction anywhere, in Turkish or English (`hayır`, `…-meye gerek yok`, `beğenmedim`, `…-meni istemiştim`, `neden … yapmadın`, `no,`, `don't`, `I told you`, …): `user` is the sentence that matched and `assistant` the line that followed;
    - `repeats` — identical Bash commands run 3 times or more: `command`, `count`.
 
 3. **Show the table** — one row per item, numbered by kind (`D1`, `E1`, `C1`, `R1`); this number is the evidence row a proposal cites:
@@ -30,7 +30,7 @@ Goal: what went wrong more than once in this session (the user corrected you, a 
    | # | Kind | What | Count | First / reply |
    |---|---|---|---|---|
 
-   The correction match is a first-word match: a row that is not a correction ("no problem", "stop the server please") stays in the table marked "not a correction" and is not used. If nothing usable is left, say there is nothing to learn and stop.
+   The correction match is a pattern match on one sentence, not a verdict: a row that is not a correction ("stop the server please") stays in the table marked "not a correction" and is not used. If nothing usable is left, say there is nothing to learn and stop.
 
 4. **Propose at most 5 rule lines.** Each line is one imperative sentence of at most 160 characters (measure: `jq -rn --arg l '<line>' '$l | length'`), shown with its evidence row (`← C1, D2`). Read `.claude/memokit/rules.md`, CLAUDE.md and `docs/LESSONS.md` (if present) first and do not repeat what they already say. Propose only what generalises:
    - a correction → what the user wants instead;

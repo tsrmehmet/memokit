@@ -211,6 +211,10 @@ docker-prune|docker volume remove data
 docker-prune|docker "volume" rm data
 ef-database-drop|"dotnet" ef database drop
 sql-destructive|p""sql -c "DROP TABLE users"
+sql-destructive|psql -c "DROP${IFS}TABLE users"
+rm-recursive|rm${IFS}-rf${IFS}$PWD
+rm-recursive|rm${IFS}-rf${IFS}src
+rm-recursive|rm$IFS-rf$IFS/tmp/x
 sql-destructive|sudo -u postgres "psql" -c 'drop table x'
 careful-state|cat /tmp/memokit-1-careful-gr""ants
 careful-state|cat /tmp/memokit-1-careful-gr\ants
@@ -325,7 +329,6 @@ XEOF
 /bin/r(m|x) -rf src
 $X push -f
 $GIT push -f
-psql -c "DROP${IFS}TABLE users"
 $RM src -rf
 $(printf %s r m) -rf src
 XEOF
@@ -340,6 +343,9 @@ XEOF
   # a comma outside braces is kept (rm -rf a,b names one file)
   run "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; . '$HOOKS/lib/careful.sh'; mk_careful_flat 'rm -rf a,b'"
   [ "$output" = "rm -rf a,b" ]
+  # ${IFS} and $IFS spell a blank
+  run "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; . '$HOOKS/lib/careful.sh'; mk_careful_flat \"\$1\"" _ 'rm${IFS}-rf${IFS}x'
+  [ "$output" = "rm -rf x" ]
 }
 
 @test "0.5.2: a flat view that cannot be computed fails closed (unparsed)" {
@@ -726,4 +732,38 @@ XEOF
     _mk_cf_rule \"\$big\" 'git' '!(' && echo neg-err" _ "$BATS_TEST_TMPDIR/segs"
   [ "$output" = "rule-err
 neg-err" ] || { printf '%s\n' "$output" | head -5; false; }
+}
+
+@test "0.8.2: the flat view keeps every raw glued cwd spelling as a \$PWD /x pair (the gate counts on it)" {
+  # mk_careful_glue_counts RAW FLAT prints "G F": G raw spellings that the flat
+  # view splits (${PWD}/x, ${OLDPWD}"/x, $(pwd)/x, `pwd`/x ...), F flat pairs.
+  # The subagent gate reads a flat $PWD /x pair as a subdirectory only when
+  # F <= G, so a raw spelling the flat view dropped would hide one real pair.
+  local c out g f
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    c="${c//@NL@/$'\n'}"
+    run "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; . '$HOOKS/lib/careful.sh'; f=\"\$(mk_careful_flat \"\$1\")\" || exit 9; mk_careful_glue_counts \"\$1\" \"\$f\"" _ "$c"
+    [ "$status" -eq 0 ] || { echo "status $status: $c"; false; }
+    g="${output% *}"; f="${output#* }"
+    [ "$g" -ge 1 ] || { echo "no raw spelling counted: $c -> [$output]"; false; }
+    [ "$f" -ge "$g" ] || { echo "flat lost a pair: $c -> [$output]"; false; }
+  done <<'EOF'
+mv "${PWD}/build" /tmp/x
+mv	"${PWD}/build"	/tmp/x
+rm -rf "${HOME}/work"
+rm -rf "$(pwd)/build"
+rm -rf `pwd`/build
+rm -rf $(pwd -P)/b
+rm -rf "$( pwd -L )"'/b'
+eval "rm -rf ${PWD}/build"
+cp a "${PWD}/x"; mv "${OLDPWD}/c" d
+\mv $PWD /tmp/x # ${PWD}/
+echo '${PWD}/' "${PWD}"/x ${PWD}''/y ${PWD}\/z
+cat <<'E'@NL@${PWD}/@NL@E@NL@rm -rf $PWD /tmp/x
+x=${PWD}/a; y=${OLDPWD}/b
+echo ${PWD}/${PWD}/${OLDPWD}/
+mv --target-directory="${PWD}/sub" a; mv -t"${PWD}/sub" a
+printf %s\\n "$(pwd)/a" `pwd -P`/b
+EOF
 }

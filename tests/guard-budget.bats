@@ -404,6 +404,35 @@ EOF")"
   done
 }
 
+# 0.8.2 A4 fix: in the main session a bare careful-convert is state only
+# beside a computed/temp token (a $, backtick, memokit-, temp location). That
+# co-occurrence is two linear greps, not a .* alternation (quadratic on a
+# long line under GNU grep): each shape below decides within 2 s of CPU.
+@test "state: guard-destructive decides a 64 KiB convert-cache co-occurrence within 2 s of CPU" {
+  mk_project "$BCFG"
+  local d="$BATS_TEST_TMPDIR" nl='
+' f n
+  { printf 'git commit -m "careful-convert'; rep ' $x' 21000; printf '"'; } > "$d/cc_msg"
+  { printf 'echo'; rep ' $x/memokit-a' 5000; printf ' careful-convert'; } > "$d/cc_last"
+  { printf 'echo careful-convert'; rep ' /tmp/a' 9000; } > "$d/cc_first"
+  { printf 'echo careful-convert'; rep ' memokit-a' 6200; } > "$d/cc_mk"
+  { printf 'echo careful-convert'; rep "$nl"'$x' 21000; } > "$d/cc_lines"
+  for f in cc_msg cc_last cc_first cc_mk cc_lines; do
+    n="$(wc -c < "$d/$f")"; [ "$n" -gt 60000 ] && [ "$n" -le 65536 ] || { echo "$f: $n bytes"; false; }
+    hook_file guard-destructive.sh "$d/$f"
+    echo "$f: ${ms} ms wall, ${cpu} ms cpu" >&3
+    [ "$(decision)" = deny ] || { echo "$f: expected deny, got [${output:0:200}]"; false; }
+    reason | grep -qF 'approval files are blocked' || { echo "$f: $(reason | cut -c1-200)"; false; }
+    [ "$cpu" -lt 2000 ] || { echo "$f: ${cpu} ms cpu (${ms} ms wall)"; false; }
+  done
+  # the bare word alone on a long line stays prose in the main session
+  { printf 'git commit -m "careful-convert'; rep ' word' 12500; printf '"'; } > "$d/cc_prose"
+  hook_file guard-destructive.sh "$d/cc_prose"
+  echo "cc_prose: ${ms} ms wall, ${cpu} ms cpu" >&3
+  lacks "$(reason)" 'approval files are blocked'
+  [ "$cpu" -lt 2000 ] || { echo "cc_prose: ${cpu} ms cpu (${ms} ms wall)"; false; }
+}
+
 # Fix round 1 (I1): past 64 KiB (too-large, approvable) a computed state
 # write is still careful-state, never approvable; within the budget.
 @test "state: a command past 64 KiB with a computed state write is careful-state within 2 s of CPU" {
@@ -596,6 +625,60 @@ EOF")"
     echo "$f: ${ms} ms wall, ${cpu} ms cpu" >&3
     [ "$status" -eq 0 ] || { echo "$f: status $status"; false; }
     [ -z "$output" ] || [ "$(decision)" = allow ] || { echo "$f: $(reason | cut -c1-200)"; false; }
+    [ "$cpu" -lt 2000 ] || { echo "$f: ${cpu} ms cpu (${ms} ms wall)"; false; }
+  done
+}
+@test "mv: the subagent guard decides a 60 KB option word within 2 s of CPU" {
+  mk_project "$BCFG"
+  local d="$BATS_TEST_TMPDIR" f
+  { printf 'mv -'; rep v 60000; printf ' a b'; } > "$d/mv_clus"
+  { printf 'mv -'; rep v 60000; printf 't /tmp/x $PWD'; } > "$d/mv_clus_t"
+  { printf 'mv -S '; rep v 60000; printf ' a b'; } > "$d/mv_suf"
+  for f in mv_clus mv_clus_t mv_suf; do
+    hook_file guard-subagent-authority.sh "$d/$f" agent-1
+    echo "$f: ${ms} ms wall, ${cpu} ms cpu" >&3
+    [ "$status" -eq 0 ] || { echo "$f: status $status"; false; }
+    case "$f" in
+      mv_clus_t) [ "$(decision)" = deny ] && reason | grep -q configuration || { echo "$f: [${output:0:200}]"; false; } ;;
+      *) [ -z "$output" ] || [ "$(decision)" = allow ] || { echo "$f: $(reason | cut -c1-200)"; false; } ;;
+    esac
+    [ "$cpu" -lt 2000 ] || { echo "$f: ${cpu} ms cpu (${ms} ms wall)"; false; }
+  done
+}
+@test "0.8.2 A1: the subagent guard decides 60 KB of blank-holding words within 2 s of CPU" {
+  mk_project "$BCFG"
+  local d="$BATS_TEST_TMPDIR" f
+  # past MK_GS_MAX_SPECIAL words (denied as too large), just under it, one huge quoted word, escaped blanks, a long cd
+  { awk 'BEGIN { printf "echo"; for (i = 0; i < 9000; i++) printf " \"w %d\"", i }'; printf ' > src/b.cs'; } > "$d/bw_over"
+  { awk 'BEGIN { printf "echo"; for (i = 0; i < 400; i++) printf " \"w %d\"", i }'; printf ' > src/b.cs'; } > "$d/bw_few"
+  { printf 'echo "'; rep 'a ' 30000; printf '" > src/b.cs'; } > "$d/bw_one"
+  { awk 'BEGIN { printf "echo"; for (i = 0; i < 9000; i++) printf " a\\ %d", i }'; printf ' > src/b.cs'; } > "$d/bw_esc"
+  { printf 'cd "src/a b"'; awk 'BEGIN { for (i = 0; i < 4000; i++) printf " && cd \"x %d\"", i }'; printf ' && echo x > b.cs'; } > "$d/bw_cd"
+  for f in bw_over bw_few bw_one bw_esc bw_cd; do
+    hook_file guard-subagent-authority.sh "$d/$f" agent-1
+    echo "$f: ${ms} ms wall, ${cpu} ms cpu" >&3
+    [ "$status" -eq 0 ] || { echo "$f: status $status"; false; }
+    case "$f" in
+      bw_over|bw_esc|bw_cd) [ "$(decision)" = deny ] || { echo "$f: [${output:0:200}]"; false; } ;;
+    esac
+    [ "$cpu" -lt 2000 ] || { echo "$f: ${cpu} ms cpu (${ms} ms wall)"; false; }
+  done
+}
+# Final review I2: the operand walks of the config gate look ahead one and two
+# words; with a per-word slice of the whole list that was quadratic (a 39 KB
+# `rm -f` list ran out of time, where base decided it in 0.7 s). A long operand
+# list is plain input: decided (allowed here), in linear time.
+@test "final review I2: the subagent guard decides a long rm/mv/find operand list within 2 s of CPU" {
+  mk_project "$BCFG"
+  local d="$BATS_TEST_TMPDIR" f
+  { printf 'rm -f'; awk 'BEGIN { for (i = 0; i < 4000; i++) printf " src/a%d", i }'; } > "$d/op_rm"
+  { printf 'mv'; awk 'BEGIN { for (i = 0; i < 4000; i++) printf " src/a%d", i }'; printf ' docs/'; } > "$d/op_mv"
+  { printf 'find src'; awk 'BEGIN { for (i = 0; i < 3000; i++) printf " -name a%d -o", i }'; printf ' -print'; } > "$d/op_find"
+  for f in op_rm op_mv op_find; do
+    hook_file guard-subagent-authority.sh "$d/$f" agent-1
+    echo "$f: ${ms} ms wall, ${cpu} ms cpu" >&3
+    [ "$status" -eq 0 ] || { echo "$f: status $status"; false; }
+    [ "$(decision)" = allow ] || { echo "$f: [${output:0:200}]"; false; }
     [ "$cpu" -lt 2000 ] || { echo "$f: ${cpu} ms cpu (${ms} ms wall)"; false; }
   done
 }

@@ -17,12 +17,13 @@ SKILL="$MK_REPO/skills/learn/SKILL.md"
 #   auto-mode deny and the user's rejection are not errors.
 # - corrections: tr "hayır" (thinking record skipped, first text line taken),
 #   en "Don't" in a text-block array (a tool_use-only record skipped),
-#   "YANLIŞ" answered by nothing (the next user message comes first), "stop".
+#   "YANLIŞ" answered by nothing (the next user message comes first), "stop",
+#   and a queued_command attachment ("... istemiştim", answered by nothing).
 #   "nothing", "durum", the isMeta and <command> records, the progress record
 #   and the sidechain record are not corrections.
 # - repeats: "git status" 3 (the progress record's nested call not counted),
 #   "npm test" 3; "ls" 2 is below the threshold.
-EXPECT='{"denies":[{"label":"[DMO-CAREFUL] rm-recursive","count":2,"first":"rm -rf build"},{"label":"Writing under src is blocked in the main session (WORKING-MODEL.md §1)","count":1,"first":"/work/demo/src/a.js"}],"errors":[{"tool":"Bash","count":3,"first":"FAIL demo.test.js"},{"tool":"Read","count":1,"first":"File does not exist."}],"corrections":[{"user":"hayır, önce testleri çalıştır","assistant":"Haklısın, önce testleri çalıştırıyorum."},{"user":"Don'"'"'t push yet","assistant":"OK, not pushing."},{"user":"YANLIŞ dosya","assistant":""},{"user":"stop","assistant":"Stopped."}],"repeats":[{"command":"git status","count":3},{"command":"npm test","count":3}]}'
+EXPECT='{"denies":[{"label":"[DMO-CAREFUL] rm-recursive","count":2,"first":"rm -rf build"},{"label":"Writing under src is blocked in the main session (WORKING-MODEL.md §1)","count":1,"first":"/work/demo/src/a.js"}],"errors":[{"tool":"Bash","count":3,"first":"FAIL demo.test.js"},{"tool":"Read","count":1,"first":"File does not exist."}],"corrections":[{"user":"hayır, önce testleri çalıştır","assistant":"Haklısın, önce testleri çalıştırıyorum."},{"user":"Don'"'"'t push yet","assistant":"OK, not pushing."},{"user":"YANLIŞ dosya","assistant":""},{"user":"stop","assistant":"Stopped."},{"user":"bunu başka dosyada istemiştim","assistant":""}],"repeats":[{"command":"git status","count":3},{"command":"npm test","count":3}]}'
 
 # Runs the miner from a directory without memokit config (English messages).
 learn_plain() {
@@ -50,29 +51,84 @@ line_of() { grep -nF -- "$2" "$1" | head -n1 | cut -d: -f1; }
   [ "$(printf '%s' "$output" | jq '[.denies[].count] | add')" = "2" ]
   grep -qF 'mk_tr_hook_deny' "$LEARN"
 }
-@test "mine: every tr and en correction prefix of the spec counts, with the following assistant line" {
-  t="$BATS_TEST_TMPDIR/c.jsonl"; : > "$t"
-  i=0
-  for p in 'hayır' 'yanlış' 'yapma' 'değil' 'olmaz' 'dur' 'no' 'wrong' "don't" 'stop' 'not that'; do
-    i=$((i + 1)); pair "$p demo $i" "ack $i" >> "$t"
-  done
-  learn_plain mine "$t"
-  [ "$status" -eq 0 ]
-  [ "$(printf '%s' "$output" | jq '.corrections | length')" = "11" ] || { echo "got: $output"; false; }
-  [ "$(printf '%s' "$output" | jq -c '.corrections[2]')" = '{"user":"yapma demo 3","assistant":"ack 3"}' ]
-  [ "$(printf '%s' "$output" | jq -c '.corrections[10]')" = '{"user":"not that demo 11","assistant":"ack 11"}' ]
+# A full 0.8.2-era record: cli entrypoint, origin kind, text as given.
+hrec() { # hrec <content-json> [origin-kind]
+  jq -nc --argjson c "$1" --arg k "${2-human}" '{type:"user",isSidechain:false,userType:"external",entrypoint:"cli",origin:{kind:$k},message:{role:"user",content:$c}}'
 }
-@test "mine: the prefix is a whole word at the start of the first line, any case" {
-  t="$BATS_TEST_TMPDIR/n.jsonl"; : > "$t"
-  for p in 'nothing to add' 'durum nedir' 'now run it' 'noted' 'stopwatch demo' 'not this one' 'değildi' 'wrongly placed' 'yapmalı mıyız' 'ok\nno' 'please stop'; do
-    pair "$(printf "$p")" "ack" >> "$t"
-  done
-  for p in 'No, the other one' 'Stop.' 'Hayır!' 'Not that file' 'DUR' '  wrong file' 'Don’t touch it'; do
-    pair "$p" "ack" >> "$t"
-  done
+qrec() { jq -nc --arg p "$1" '{type:"attachment",isSidechain:false,entrypoint:"cli",humanTurn:true,attachment:{type:"queued_command",commandMode:"prompt",prompt:$p,origin:{kind:"human"}}}'; }
+@test "learn: corrections are found in realistic records" {
+  t="$BATS_TEST_TMPDIR/real.jsonl"
+  {
+    # positives, each with the sentence that must be reported
+    hrec "\"'/tmp/shot-1.png' bunu burada kullanmana gerek yok.\""
+    hrec '[{"type":"text","text":"[Image #1] üçünü de beğenmedim"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA=="}}]'
+    qrec 'raporu bir de sen incelemeni istemiştim'
+    hrec '"deploy neden yapmadın?"'
+    hrec '"tamam, devam et. Don'"'"'t touch the config file. sonra bak"'
+    hrec '"İPTAL ET bunu"'
+    hrec '"bu kısım hiç olmamış, tekrar yaz"'
+    hrec '"ok\n\nI told you to keep the old name"'
+    # negatives
+    hrec '"yanlış yok"'
+    hrec '"yanlış mı düşünüyorum?"'
+    hrec '"durum nedir"'
+    hrec '"bak <pasted_content id=1>\nstop\nhayır gerek yok\n</pasted_content> tamam"'
+    hrec '"hayır gerek yok, otomatik görev"' task-notification
+    hrec '"totp yapmışsın, mantıklı olmuş"'
+    jq -nc '{type:"user",isMeta:true,isSidechain:false,message:{role:"user",content:[{type:"text",text:"[Image: source: /x/a.png] hayır gerek yok"}]}}'
+    jq -nc '{type:"user",isMeta:true,isSidechain:false,message:{role:"user",content:[{type:"text",text:"Base directory for this skill: /x\ndur, yapma"}]}}'
+    qrec 'durum raporu hazır mı'
+  } > "$t"
   learn_plain mine "$t"
   [ "$status" -eq 0 ]
-  [ "$(printf '%s' "$output" | jq -c '[.corrections[].user]')" = '["No, the other one","Stop.","Hayır!","Not that file","DUR","  wrong file","Don’t touch it"]' ] || { echo "got: $output"; false; }
+  [ "$(printf '%s' "$output" | jq '.corrections | length')" = "8" ] || { echo "got: $output"; false; }
+  got="$(printf '%s' "$output" | jq -c '[.corrections[].user]')"
+  want='["bunu burada kullanmana gerek yok.","üçünü de beğenmedim","raporu bir de sen incelemeni istemiştim","deploy neden yapmadın?","Don'"'"'t touch the config file.","İPTAL ET bunu","bu kısım hiç olmamış, tekrar yaz","I told you to keep the old name"]'
+  [ "$got" = "$want" ] || { echo "got:  $got"; echo "want: $want"; false; }
+}
+@test "learn: compact summaries and queued messages of other origins are not corrections" {
+  t="$BATS_TEST_TMPDIR/oth.jsonl"
+  { jq -nc '{type:"user",isCompactSummary:true,message:{content:"This session is being continued from a previous one. - hayır gerek yok"}}'
+    for k in peer task-notification; do
+      jq -nc --arg k "$k" '{type:"attachment",attachment:{type:"queued_command",prompt:"hayır gerek yok",origin:{kind:$k}}}'
+    done; } > "$t"
+  learn_plain mine "$t"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq '.corrections | length')" = "0" ] || { echo "got: $output"; false; }
+}
+@test "learn: a record without origin is read by the old rules" {
+  t="$BATS_TEST_TMPDIR/old.jsonl"
+  { jq -nc '{type:"user",message:{content:"bu fonksiyon gerek yok"}}'
+    jq -nc '{type:"user",message:{content:"<task-notification>hayır gerek yok</task-notification>"}}'; } > "$t"
+  learn_plain mine "$t"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -c '[.corrections[].user]')" = '["bu fonksiyon gerek yok"]' ] || { echo "got: $output"; false; }
+}
+# The transcript format is not ours: one record of an odd shape must not fail
+# the run. A non-object attachment, a missing one and an array are not a queued
+# message, and a non-object origin is not "human": the record is skipped (no
+# row is invented), every other record is still read.
+@test "learn: a record with an odd attachment or origin shape is skipped, the run still succeeds" {
+  i=0
+  for odd in '{"type":"attachment","attachment":"oops"}' '{"type":"attachment"}' '{"type":"attachment","attachment":["a"]}' \
+    '{"type":"attachment","attachment":{"type":"queued_command","prompt":"hayır gerek yok","origin":"human"}}' \
+    '{"type":"user","origin":"human","message":{"content":"hayır gerek yok"}}' \
+    '{"type":"user","origin":["human"],"message":{"content":"hayır gerek yok"}}'; do
+    i=$((i + 1)); t="$BATS_TEST_TMPDIR/odd-$i.jsonl"
+    { hrec '"bu fonksiyon gerek yok"'; printf '%s\n' "$odd"; } > "$t"
+    learn_plain mine "$t"
+    [ "$status" -eq 0 ] || { echo "$odd: status $status: $output"; false; }
+    [ "$(printf '%s' "$output" | jq -c '[.corrections[].user]')" = '["bu fonksiyon gerek yok"]' ] || { echo "$odd: got: $output"; false; }
+  done
+}
+@test "learn: a matched sentence is clipped to 200 characters and a message to 2000" {
+  t="$BATS_TEST_TMPDIR/clip.jsonl"
+  long="$(printf 'x%.0s' $(seq 1 500))"
+  { hrec "$(jq -nc --arg l "$long gerek yok" '$l')"
+    hrec "$(jq -nc --arg l "$(printf 'y%.0s' $(seq 1 2100)) hayır olmaz" '$l')"; } > "$t"
+  learn_plain mine "$t"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -c '[.corrections[].user | length]')" = "[200]" ] || { echo "got: $output"; false; }
 }
 @test "mine: a Bash command run three identical times is a repeat, twice is not" {
   t="$BATS_TEST_TMPDIR/r.jsonl"; : > "$t"
@@ -116,7 +172,7 @@ res() { jq -nc --arg i "$1" --arg t "$2" '{type:"user",message:{role:"user",cont
 @test "mine: long texts are clipped" {
   t="$BATS_TEST_TMPDIR/l.jsonl"
   long="$(printf 'x%.0s' $(seq 1 500))"
-  pair "no $long" "$long" > "$t"
+  pair "hayır $long" "$long" > "$t"
   for i in 1 2 3; do
     jq -nc --arg c "echo $long" '{type:"assistant",message:{id:"m",content:[{type:"tool_use",id:"x",name:"Bash",input:{command:$c}}]}}' >> "$t"
   done
@@ -150,7 +206,7 @@ res() { jq -nc --arg i "$1" --arg t "$2" '{type:"user",message:{role:"user",cont
   touch -t 202001010000 "$cfg/projects/$slug/older.jsonl"
   cp "$FX/learn.jsonl" "$cfg/projects/$slug/newer.jsonl"
   run env -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_SESSION_ID CLAUDE_CONFIG_DIR="$cfg" "$MK_BASH" -c 'cd "$1" && shift && "$@" 2>/dev/null' x "$PROJ" "$MK_BASH" "$LEARN" mine
-  [ "$status" -eq 0 ]; [ "$(printf '%s' "$output" | jq '.corrections | length')" = "4" ]
+  [ "$status" -eq 0 ]; [ "$(printf '%s' "$output" | jq '.corrections | length')" = "5" ]
   rm "$cfg/projects/$slug/newer.jsonl"
   run env -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_SESSION_ID CLAUDE_CONFIG_DIR="$cfg" "$MK_BASH" -c 'cd "$1" && shift && "$@" 2>/dev/null' x "$PROJ" "$MK_BASH" "$LEARN" mine
   [ "$status" -eq 0 ]; [ "$(printf '%s' "$output" | jq -cS .)" = '{"corrections":[],"denies":[],"errors":[],"repeats":[]}' ]

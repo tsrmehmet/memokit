@@ -266,12 +266,13 @@ fi
 # fork: the same digest, nothing UNREADABLE.
 _ig_compare() {
   local r=""
-  _ig_changed=""; _ig_sl=""; _ig_pt=""
+  _ig_pre=""; _ig_changed=""; _ig_sl=""; _ig_pt=""
   mk_integrity_digest "$_IG_SNAP" >/dev/null
   { IFS= read -r _ig_sl
     case "$_ig_sl" in '@@t '*) _ig_pt="${_ig_sl#@@t }"; IFS= read -r _ig_sl ;; esac
     IFS= read -r -d '' r; } < "$1"
   r="${r%"$_ig_nl"}"
+  _ig_pre="$r"
   if [ "$MK_IG_DIGEST" = "$r" ] && ! _ig_unreadable "$MK_IG_DIGEST"; then return 0; fi
   _ig_changed="$(mk_integrity_changed "$1" <<EOF
 $MK_IG_DIGEST
@@ -315,7 +316,7 @@ _ig_rebase() {
 _ig_pt="${_ig_pt:-}"; _ig_keep=0
 if [ "$_ig_changed" != "?" ] && [ "$_ig_ev" != SubagentStop ] && [ -n "$_ig_pt" ] &&
    _ig_rules="$(mk_integrity_allow_only "$_ig_changed" "${_ig_sl#@@settings }")" && [ -n "$_ig_rules" ]; then
-  mk_integrity_perm_ok "$_ig_rules" "$_IG_PERM" "$_ig_pt" "$_ig_t" "$MK_IG_DIGEST"
+  mk_integrity_perm_ok "$_ig_rules" "$_IG_PERM" "$_ig_pt" "$_ig_t" "$MK_IG_DIGEST" "$_ig_pre"
   case $? in
     0)
       [ -z "$MK_IG_NARROW" ] || mk_integrity_mark "$_IG_ALLOW" "$MK_IG_NARROW" 2>/dev/null

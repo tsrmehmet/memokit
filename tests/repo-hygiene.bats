@@ -44,14 +44,17 @@ load helpers
   grep -qF '`remote.hosts[]`' "$MK_REPO/README.md"
   grep -qF '`careful.patterns[].target`' "$MK_REPO/README.md"
 }
-@test "changelog: 0.8.1 entry matches plugin.json version" {
+@test "changelog: 0.8.2 entry matches plugin.json version" {
   v="$(jq -r .version "$MK_REPO/.claude-plugin/plugin.json")"
-  [ "$v" = "0.8.1" ]
+  [ "$v" = "0.8.2" ]
   sed -n '5,12p' "$MK_REPO/CHANGELOG.md" | grep -qF "## $v "
-  sec="$(awk '/^## 0\.8\.1/{p=1;next} /^## /{p=0} p' "$MK_REPO/CHANGELOG.md")"
-  for w in 'Flow' 'Agents' 'Hardening' 'Tests' 'Measured' 'parallel.auto' 'snapshot'; do
+  sec="$(awk '/^## 0\.8\.2/{p=1;next} /^## /{p=0} p' "$MK_REPO/CHANGELOG.md")"
+  for w in '### Guards' '### Integrity' '### CI' '### Learn'; do
     printf '%s' "$sec" | grep -qF -- "$w" || { echo "$w"; false; }
   done
+}
+@test "changelog: 0.8.1 entry is still present" {
+  grep -qF '## 0.8.1 ' "$MK_REPO/CHANGELOG.md"
 }
 @test "changelog: 0.8.0 entry is still present" {
   grep -qF '## 0.8.0 ' "$MK_REPO/CHANGELOG.md"
@@ -91,12 +94,29 @@ load helpers
   run grep -nE '\$\{?BATS_TMPDIR(:-/tmp)?\}?/' "$MK_REPO"/tests/*.bats "$MK_REPO"/tests/*.bash
   [ -z "$output" ] || { echo "$output"; false; }
 }
-# GitHub Actions starts every step with SIGPIPE ignored: a printf feeding a
-# reader that may stop early (grep -q, head) then gets EPIPE and prints
-# "write error: Broken pipe" into the hook output. Such a printf drops its
-# stderr (the single-line form; pipelines over several lines are quieted as
-# a group, see lib/careful.sh and guard-subagent-authority.sh).
-@test "hooks: a printf piped into grep -q or head drops its stderr" {
-  run bash -c "cd '$MK_REPO' && grep -nE 'printf [^|]*[|] *(LC_ALL=C +)?(grep +(-[A-Za-z]+ +)*-[A-Za-z]*q|head)' hooks/*.sh hooks/lib/*.sh | grep -vE 'printf [^|]*2>/dev/null *[|]' | grep -vE '^[^:]+:[0-9]+: *#' || true"
+# GitHub Actions starts every step with SIGPIPE ignored: a writer feeding a
+# reader that may stop early (grep -q/-m, head) then gets EPIPE and prints
+# "write error: Broken pipe" into the hook output. tests/lint-pipe-writers.awk
+# follows pipelines over several lines: every writer upstream of such a reader
+# carries 2>/dev/null or sits inside a closer (} ) done) that does.
+# Not modelled: awk `exit` readers, `while read ... break`; the `{` split also
+# hits `${x}`; writers upstream of a mid-pipeline `{`, `(` or `$(` are dropped.
+@test "repo-hygiene: the pipe-writer lint flags every bad shape in its fixture" {
+  run awk -f "$MK_REPO/tests/lint-pipe-writers.awk" "$MK_REPO/tests/fixtures/lint/pipe-writers.sh"
+  got="$(printf '%s\n' "$output" | cut -d: -f2 | sort -nu | tr '\n' ' ')"
+  [ "$got" = "4 5 7 9 10 12 13 16 " ] || { echo "flagged: $got"; echo "$output"; false; }
+}
+# An apostrophe in a heredoc body opens a quote the awk never closes: it must
+# say so (name the file, exit 1) instead of silently skipping what follows.
+@test "repo-hygiene: the pipe-writer lint reports a file that ends inside a quote" {
+  run awk -f "$MK_REPO/tests/lint-pipe-writers.awk" "$MK_REPO/tests/fixtures/lint/unbalanced.sh" "$MK_REPO/tests/fixtures/lint/pipe-writers.sh"
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | grep -q 'unbalanced\.sh: unbalanced quote at end of file'
+  # the next file is still linted
+  printf '%s\n' "$output" | grep -q 'pipe-writers\.sh:4:'
+}
+@test "hooks: no writer piped into grep -q/-m or head is left loud" {
+  cd "$MK_REPO"
+  run awk -f tests/lint-pipe-writers.awk hooks/*.sh hooks/lib/*.sh skills/*/scripts/*.sh
   [ -z "$output" ] || { echo "$output"; false; }
 }

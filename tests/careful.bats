@@ -80,6 +80,48 @@ rm-recursive|rm -fr ./data
 rm-recursive|rm --recursive docs
 rm-recursive|rm -rf node_modules src
 rm-recursive|rm -rf /
+rm-recursive|find . -delete
+rm-recursive|find .. -exec rm -rf {} +
+rm-recursive|find $PWD -delete
+rm-recursive|find / -exec rm -rf {} \;
+rm-recursive|find ~ -delete
+rm-recursive|find -L . -delete
+rm-recursive|find /home/u/proj -execdir rm -rf {} +
+rm-recursive|find . -name x -o -delete
+rm-recursive|find . -delete -o -name x
+rm-recursive|find . -delete , -name x
+rm-recursive|find . ! -name x -delete
+rm-recursive|find . -not -name x -delete
+rm-recursive|find . -delete -name x
+rm-recursive|find . -mindepth 1 -delete
+rm-recursive|find . -maxdepth 1 -delete
+rm-recursive|find . -maxdepth 2 -delete
+rm-recursive|find . -exec sudo rm -rf {} +
+rm-recursive|find . -exec env rm -rf {} +
+rm-recursive|find . -exec unlink {} \;
+rm-recursive|find $HOME -delete
+rm-recursive|find $PWD/.. -delete
+rm-recursive|find . -exec find {} -delete \;
+rm-recursive|find . -exec find {} -delete +
+rm-recursive|find . -exec sh -c 'find "$1" -delete' _ {} \;
+rm-recursive|find . -maxdepth 0 -exec find {} -delete \;
+rm-recursive|find . -exec true {} \; -delete
+rm-recursive|find . -exec true {} ';' -delete
+rm-recursive|find . -exec true {} ";" -delete
+rm-recursive|find . -exec true {} $';' -delete
+rm-recursive|find . -exec chmod u+w {} \; -delete
+rm-recursive|find . ! \( -name x -o -name y \) -delete
+rm-recursive|find . -not \( -name x -o -name y \) -delete
+rm-recursive|find $PWD -maxdepth 0 -exec mv {} /tmp/x \;
+rm-recursive|find .. -maxdepth 1 -exec mv {} /tmp/x \;
+rm-recursive|find . -execdir /bin/mv {} /tmp/x +
+rm-recursive|if find . -delete; then :; fi
+rm-recursive|while find . -delete; do break; done
+rm-recursive|until find . -delete; do break; done
+rm-recursive|if false; then :; elif find . -delete; then :; fi
+rm-recursive|if true; then find . -delete; fi
+rm-recursive|for d in a; do find . -delete; done
+rm-recursive|if false; then :; else find . -delete; fi
 sql-destructive|psql -h db -c "DROP TABLE users"
 sql-destructive|mysql -e 'delete from orders'
 sql-destructive|sqlite3 app.db "truncate t"
@@ -98,6 +140,51 @@ careful-state|rm x/memokit-1-careful-armed-s1-agent-1
 careful-state|echo x > /tmp/memokit-123-careful-convert/k/doc.pdf.md
 careful-state|cp forged.md /var/folders/x/T/memokit-1-Careful-Convert/k/a.pdf.md
 EOF
+}
+
+@test "careful-convert as prose: labelled for subagents, not for the main session (MK_CF_SESSION_MAIN=1); paths and globs stay labelled" {
+  mk_project
+  local c
+  main_labels() {
+    run "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; . '$HOOKS/lib/careful.sh'; mk_resolve_root '{}'; mk_load_config >/dev/null; MK_CF_SESSION_MAIN=1; mk_careful_labels \"\$1\"" _ "$1"
+  }
+  for c in 'git commit -m "fix careful-convert cache naming"' 'grep -rn careful-convert hooks/'; do
+    labels "$c"
+    printf '%s\n' "$output" | grep -qx 'careful-state' || { echo "sub: $c -> [$output]"; false; }
+    main_labels "$c"
+    ! printf '%s\n' "$output" | grep -qx 'careful-state' || { echo "main: $c -> [$output]"; false; }
+  done
+  for c in 'cat /tmp/memokit-1-careful-convert/x' 'ls *careful-convert' 'echo x > /tmp/memokit-123-careful-convert/k/doc.pdf.md'; do
+    main_labels "$c"
+    printf '%s\n' "$output" | grep -q 'careful-state' || { echo "main: $c -> [$output]"; false; }
+  done
+}
+
+@test "careful-convert beside a computed or temp token anywhere in the text is state in the main session (co-occurrence, A4)" {
+  mk_project
+  local c nl='
+'
+  main_labels() {
+    run "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; . '$HOOKS/lib/careful.sh'; mk_resolve_root '{}'; mk_load_config >/dev/null; MK_CF_SESSION_MAIN=1; mk_careful_labels \"\$1\"" _ "$1"
+  }
+  # the word and the token on different lines, either order, any case, or
+  # only joined once quotes and backslashes are deleted
+  for c in "echo careful-convert${nl}ls${nl}\$X" "echo \$X${nl}ls${nl}echo careful-convert" \
+           'echo CAREFUL-CONVERT $x' 'echo Careful-Convert /TMP/a' 'echo careful-convert `id`' \
+           'echo careful-con""vert mem\okit-1' 'echo careful-convert me""mokit-1' 'echo careful-convert mem\okit-1' \
+           'echo careful-convert tmp""dir' \
+           'ls careful-convert /tmp.exe/x' 'cat careful-convert/k/doc.md /var/folders.EXE/' \
+           'cd /private/tmp.EXE/memokit && ls careful-convert'; do
+    main_labels "$c"
+    printf '%s\n' "$output" | grep -qx 'careful-state' || { echo "main: $c -> [$output]"; false; }
+  done
+  # prose without such a token stays unlabelled in the main session, state for a subagent
+  for c in 'git commit -m "fix careful-convert prose"' 'echo careful-convert /tmpx tmp' 'ls careful-convert /tmp.exx/x' 'ls careful-convert /tmp.exe' "echo careful-convert${nl}ls -la"; do
+    main_labels "$c"
+    ! printf '%s\n' "$output" | grep -qx 'careful-state' || { echo "main: $c -> [$output]"; false; }
+    labels "$c"
+    printf '%s\n' "$output" | grep -qx 'careful-state' || { echo "sub: $c -> [$output]"; false; }
+  done
 }
 
 @test "builtin patterns leave safe commands alone" {
@@ -134,6 +221,20 @@ kubectl get pods
 helm list
 docker ps
 docker rm abc
+find . -name '*.pyc' -delete
+find . -type f -name '*.log'
+find build -delete
+find . -print
+find . \( -name a -o -name b \) -delete
+find . -name '*.pyc' -delete -o -name __pycache__ -delete
+find . -exec echo {} +
+find build -exec true {} \; -delete
+find . -name '*.bak' -exec mv {} old/ \;
+find src -exec mv {} /tmp/x \;
+find . -name x -exec find {} -delete \;
+cp a "$PWD/b"
+echo $PWD
+cd $OLDPWD
 EOF
 }
 
@@ -783,6 +884,13 @@ code_of() { reason | grep -oE "'(onay|approve) [0-9a-f]{6}'" | grep -oE '[0-9a-f
   run_hook inject-rules.sh "$(prompt_payload "onay $c2")"
   run_hook guard-destructive.sh "$(bash_payload 'git clean -fd')"; [ -z "$output" ]
   run_hook guard-destructive.sh "$(bash_payload 'git reset --hard')"; [ -z "$output" ]
+}
+
+@test "guard: rm with IFS-variable blanks is denied in the main session with a code" {
+  mk_project
+  run_hook guard-destructive.sh "$(bash_payload 'rm${IFS}-rf${IFS}$PWD')"
+  [ "$(decision)" = "deny" ]; reason | grep -q '^\[DMO-CAREFUL\] rm-recursive'
+  [ -n "$(code_of)" ]
 }
 
 @test "guard: same rules for subagents; English message uses approve" {

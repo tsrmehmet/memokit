@@ -104,6 +104,23 @@ MK_CF_DYNEXEMPT="^[[:space:]]*${_mk_cf_exw}[[:space:]]+(${_mk_cf_exu})*\$"
 _mk_cf_mkglob='memokit-[^[:space:]/.]*[*?[]'
 _mk_cf_tmpword='(/tmp/|/private/tmp/|/var/folders/|tmpdir|careful)'
 MK_CF_STATE_RE="careful-grants|careful-pending|careful-window|careful-active|careful-config|careful-integrity|careful-armed|careful-convert|careful[^[:space:]/.]*[*?[][^[:space:]/.]*grant|${_mk_cf_tmpword}[^[:space:]]*${_mk_cf_mkglob}|${_mk_cf_mkglob}[^[:space:]]*${_mk_cf_tmpword}"
+# The main session's variant (spec 0.8.2 A4): a bare careful-convert (preceded
+# by a blank, a quote, "=" or the line start) is prose, e.g. a commit message,
+# and no longer counts by itself. A convert-cache name preceded by any other
+# character (a path, *careful-convert) counts as before. -m"careful-convert"
+# (unspaced quote) stays denied by design: fail closed. Subagents keep the
+# bare word. The quote sits in its own variable (bash 3.2 parse trap).
+# The bare word still counts when the same text also holds a $ or backtick (a
+# name the shell computes: X=careful-convert; cat memokit-1-$X/..), memokit-,
+# or a temp location other than "careful" (_mk_cf_cvx). That co-occurrence is
+# NOT in the regex: an alternation "careful-convert.*CVX|CVX.*careful-convert"
+# is quadratic on one long line under GNU grep (seconds of CPU at 64 KiB).
+# _mk_cf_cooc tests it as two linear greps, on t (the text with newlines,
+# quotes and backslashes deleted, one line) and then on the views (the flat
+# view can build a token t lacks), both in _mk_cf_labels; the main session only.
+_mk_cf_nq="\"'"
+_mk_cf_cvx="(\\\$|\`|memokit-|/tmp/|/private/tmp/|/var/folders/|tmpdir)"
+MK_CF_STATE_MAIN_RE="${MK_CF_STATE_RE/|careful-convert|/|[^[:space:]${_mk_cf_nq}=]careful-convert|}"
 MK_CF_STATE_GLOB_RE='careful[^[:space:]/.]*[*?[]|memokit-[^[:space:]/.]*[*?[]'
 # Computed writes into state paths (spec 0.8.1 3c): a word (no blank or
 # ; & |) holding memokit- or careful- and one of $, a backtick or { (its
@@ -130,6 +147,10 @@ _MK_CF_TEMP_OK=0; _MK_CF_TEMP_LIT=0
 # payload without agent_id (the main session). Reset here so the environment
 # can never set it.
 MK_CF_MAIN=0
+# 1 only when guard-destructive.sh sets it for a payload without agent_id
+# (set for every Bash call, unlike MK_CF_MAIN): _mk_cf_labels then uses
+# MK_CF_STATE_MAIN_RE. Reset here.
+MK_CF_SESSION_MAIN=0
 # Lane cleanup (spec 0.8 Part D, goals 2-3): MK_CF_WT=1 only in
 # guard-destructive.sh's second labelling of a main-session command whose
 # labels are all lane-cleanup labels, after it sourced lib/worktrees.sh;
@@ -149,12 +170,20 @@ _mk_cf_has() {
   [ "$rc" -ne 1 ]
 }
 
+# _mk_cf_cooc TEXT -- the main session's convert-cache rule: TEXT holds
+# careful-convert and (anywhere, any order) a _mk_cf_cvx token, both
+# case-insensitive. Two linear greps; the second runs only when the first
+# hits. Fail closed: a grep error counts as a hit (_mk_cf_has).
+_mk_cf_cooc() {
+  _mk_cf_has 'careful-convert' "$1" i && _mk_cf_has "$_mk_cf_cvx" "$1" i
+}
+
 # _mk_cf_wstate ERE TEXT -- when TEXT matches ERE (case-insensitive), print
 # careful-state if TEXT also matches MK_CF_STATE_RE or names a temp location
 # (_mk_cf_tmpword), careful-state-glob otherwise. One grep when ERE misses.
 _mk_cf_wstate() {
   _mk_cf_has "$1" "$2" i || return 0
-  if _mk_cf_has "$MK_CF_STATE_RE|$_mk_cf_tmpword" "$2" i; then
+  if _mk_cf_has "${_mk_cf_sre:-$MK_CF_STATE_RE}|$_mk_cf_tmpword" "$2" i; then
     printf 'careful-state\n'
   else
     printf 'careful-state-glob\n'
@@ -568,6 +597,7 @@ mk_careful_strip() {
 #     an adjacent word (echo rm;RM) is not skipped. A longer word's prefix
 #     is lowercased too (RMDIR -> rmDIR): harmless, as every rule needs the
 #     tool word followed by a non-word character.
+#   $IFS / ${IFS}           rm${IFS}-rf${IFS}x  -> rm -rf x (a blank)
 #   ; | -> blank-padded             x;git push -f|cat   -> x ; git push -f | cat
 #   blank before < > after a word   rm>/dev/null -rf x  -> rm >/dev/null -rf x
 #     (not after a digit, & < >:    2>&1 2>/dev/null &>f stay whole)
@@ -579,7 +609,7 @@ mk_careful_strip() {
 mk_careful_flat() {
   local out nl='
 ' tok="mk-sentinel-$$-$RANDOM-$RANDOM"
-  out="$(printf '%s\n%s\n' "$1" "$tok" 2>/dev/null | LC_ALL=C sed -E -e 's/["'\''\\]//g' -e 's/\$\{/$/g' -e 's/:-/ /g' \
+  out="$(printf '%s\n%s\n' "$1" "$tok" 2>/dev/null | LC_ALL=C sed -E -e 's/["'\''\\]//g' -e 's/\$\{/$/g' -e 's/[$]IFS\}/ /g' -e 's/[$]IFS([^[:alnum:]_]|$)/ \1/g' -e 's/[$]IFS([^[:alnum:]_]|$)/ \1/g' -e 's/:-/ /g' \
     -e '/[{]/s/,/ /g' -e 's/[`(){}]/ /g' -e 's/\.[Ee][Xx][Ee]([^[:alnum:]_.-]|$)/\1/g' \
     -e 's/(^|[^[:alnum:]_.$-])[Rr][Mm]/\1rm/g' \
     -e 's/(^|[^[:alnum:]_.$-])[Gg][Ii][Tt]/\1git/g' \
@@ -595,6 +625,22 @@ mk_careful_flat() {
     -e 's/[;|]/ & /g' -e 's/([^0-9&<> ])([<>])/\1 \2/g' \
     -e 's/([^&<> ])&/\1 \&/g' -e 's/ &([^&>])/ \& \1/g')" || return 1
   case "$out" in *"$nl$tok") printf '%s' "${out%"$nl$tok"}" ;; *) return 1 ;; esac
+}
+
+# mk_careful_glue_counts RAW FLAT -- prints "G F": G counts the raw spellings
+# that mk_careful_flat splits into a cwd word and a /x word (${PWD}/x,
+# ${OLDPWD}"/x, ${HOME}/x, $(pwd)/x, `pwd -P`/x: braces, parentheses and backquotes
+# become blanks), F the flat pairs (PWD /x, pwd /x). Every raw spelling
+# becomes one flat pair (careful-flat.bats pins this), so F > G means a pair
+# the raw command did not glue. $PWD/x, $PWD"/x and ~+/x stay one flat word.
+# One awk; an awk that fails prints nothing.
+MK_CF_GLUE_RAW='[{]((OLD)?PWD|HOME)[}]["'\'']*/|pwd( +-[PL])? *[)`]["'\'']*/'
+MK_CF_GLUE_FLAT='(PWD|HOME)[[:blank:]]+/|pwd( +-[PL])?[[:blank:]]+/'
+mk_careful_glue_counts() {
+  MK_CF_R="$1" MK_CF_F="$2" MK_CF_GR="$MK_CF_GLUE_RAW" MK_CF_GF="$MK_CF_GLUE_FLAT" LC_ALL=C awk 'BEGIN {
+    r = ENVIRON["MK_CF_R"]; f = ENVIRON["MK_CF_F"]
+    g = gsub(ENVIRON["MK_CF_GR"], "", r); p = gsub(ENVIRON["MK_CF_GF"], "", f)
+    print g " " p }' 2>/dev/null
 }
 
 # mk_careful_segments CMD -- one shell segment per line. Quotes are not
@@ -652,11 +698,59 @@ _mk_cf_wt_skip() {
   [ "${MK_CF_WT:-0}" = 1 ] && [ "${MK_CF_MAIN:-0}" = 1 ] && [ "${_MK_CF_TEMP_LIT:-0}" = 1 ]
 }
 
+# _mk_cf_find SEGS -- 0 when a segment is an UNFILTERED find that deletes
+# (-delete, or -exec/-execdir/-ok/-okdir running rm, unlink, rmdir, shred,
+# find or mv anywhere before the terminating ; or +: a mv moves the start dir
+# away) from a start dir that is . or ..
+# (any chain of them), a $PWD or $HOME word, ~, / or an absolute path (none
+# given means .). The expression is walked in order: a filter (-name, -type,
+# -prune ...) counts only BEFORE the delete in the same branch (reset at -o,
+# -or and ,), not after ! or -not; parentheses are transparent. Keep the
+# filter list in step with the find branch of _mk_gs_cfg_hit in
+# guard-subagent-authority.sh. One awk over the segments.
+_mk_cf_find() {
+  # shellcheck disable=SC2016  # awk program, not an expansion
+  printf '%s\n' "$1" 2>/dev/null | LC_ALL=C awk '
+    function rooted(w) {
+      if (w ~ /^(\.|\.\/|\.\.|\.\.\/|(\.\.\/)+\.\.\/?)$/) return 1
+      if (w ~ /^(\$PWD|\$\{PWD\}|\$OLDPWD|\$\{OLDPWD\}|\$HOME|\$\{HOME\}|~\+|~-|~)(\/\.\.)*\/?$/) return 1
+      return (w ~ /^\//)
+    }
+    { n = split($0, f, /[ \t]+/); i = 1
+      while (i <= n && (f[i] == "" || f[i] ~ /^[({!]$/ || f[i] ~ /=/ || f[i] ~ /^-/ ||
+             f[i] ~ /^(sudo|command|nohup|time|env|exec|builtin|eval|xargs|if|elif|while|until|then|do|else|coproc)$/)) i++
+      if (i > n || f[i] !~ /(^|\/)find$/) next
+      i++; rt = 0; any = 0; inx = 0; hit = 0; flt = 0; ex = 0; pr = ""; dep = 0; ng = 0
+      for (; i <= n; i++) {
+        w = f[i]; if (w == "") continue
+        if (!inx) {
+          if (w ~ /^-[HLP]$|^-[DO]/) continue
+          if (w ~ /^-/ || w ~ /^\\?[(!]/ || w == "MKFLP") inx = 1
+          else { any = 1; if (rooted(w)) rt = 1; continue }
+        }
+        if (ex) {
+          if (w ~ /^(\\?;|\\|\+|MKFSEMI)$/) ex = 0
+          else if (!flt && (w == "-delete" || w ~ /(^|\/)(rm|unlink|rmdir|shred|find|mv)$/)) hit = 1
+          pr = w; continue
+        }
+        if (w ~ /^-(exec|execdir|ok|okdir)$/) ex = 1
+        else if (w ~ /^(-o|-or|,)$/) flt = 0
+        else if (w ~ /^(MKFLP|\\?\()$/) { dep++; if (pr ~ /^(!|-not|\\!)$/ && !ng) ng = dep }
+        else if (w ~ /^(MKFRP|\\?\))$/) { if (ng == dep) ng = 0; if (dep > 0) dep-- }
+        else if (w == "-delete") { if (!flt) hit = 1 }
+        else if (w ~ /^-(name|iname|path|ipath|wholename|iwholename|regex|iregex|newer.*|type|mtime|mmin|atime|amin|ctime|cmin|size|user|group|perm|prune|empty|links)$/ && pr !~ /^(!|-not|\\!)$/ && !ng) flt = 1
+        pr = w
+      }
+      if (!any) rt = 1
+      if (rt && hit) found = 1 }
+    END { exit(found ? 0 : 1) }'
+}
+
 # mk_careful_builtin CMD [ONE] -- builtin labels the command matches, one per line
 # (careful-state is checked by mk_careful_labels). A failing stage prints
 # unparsed and falls back to the unprocessed text, so no rule is skipped.
 mk_careful_builtin() {
-  local segs all rmsegs seg flat n rc=0 nl='
+  local segs all rmsegs seg flat n fs m fa rc=0 nl='
 ' tok="mk-sentinel-$$-$RANDOM-$RANDOM"
   if ! flat="$(printf '%s' "$1" 2>/dev/null | tr '\n' ' ')" || _mk_cf_empty "$1" "$flat"; then printf 'unparsed\n'; flat="$1"; fi
   if { _mk_cf_has '(^|[^[:alnum:]_])(psql|pgcli|mysql|mariadb|sqlite3|sqlcmd)([^[:alnum:]_./-]|$)' "$1" i &&
@@ -674,7 +768,7 @@ mk_careful_builtin() {
   esac
   # Only segments naming a tool (or holding a word the shell computes) can
   # match a segment rule; drop the rest and duplicates once, not per rule.
-  segs="$(printf '%s\n' "$all" 2>/dev/null | awk -v s="$tok" '/git|rm|kubectl|helm|docker|dotnet|[$*?]|\[/ && !seen[$0]++ { print } END { print s }')"
+  segs="$(printf '%s\n' "$all" 2>/dev/null | awk -v s="$tok" '/git|rm|kubectl|helm|docker|dotnet|find|[$*?]|\[/ && !seen[$0]++ { print } END { print s }')"
   case "$segs" in
     "$tok") segs="" ;;
     *"$nl$tok") segs="${segs%"$nl$tok"}" ;;
@@ -727,6 +821,20 @@ mk_careful_builtin() {
   done <<EOF
 $rmsegs
 EOF
+  fs="$segs"
+  case "$1" in
+    *find*)
+      # The escaped or quoted ; ( ) of a find expression become tokens
+      # (MKFSEMI, MKFLP, MKFRP) before the split, as in the subagent gate.
+      # shellcheck disable=SC2016  # sed programs, not expansions
+      if m="$(printf '%s' "$1" 2>/dev/null | LC_ALL=C sed -E -e 's/\\;/ MKFSEMI /g' -e 's/\\[(]/ MKFLP /g' -e 's/\\[)]/ MKFRP /g' \
+          -e 's/[$]?'\''[;]'\''/ MKFSEMI /g' -e 's/[$]?'\''[(]'\''/ MKFLP /g' -e 's/[$]?'\''[)]'\''/ MKFRP /g' \
+          -e 's/"[;]"/ MKFSEMI /g' -e 's/"[(]"/ MKFLP /g' -e 's/"[)]"/ MKFRP /g')" &&
+         fa="$(mk_careful_segments "$tok$nl$m")"; then
+        case "$fa" in "$tok$nl"*) fs="$fs$nl${fa#"$tok$nl"}" ;; esac
+      fi ;;
+  esac
+  if _mk_cf_find "$fs"; then printf 'rm-recursive\n'; fi
   if _mk_cf_rule "$segs" '(^|[^[:alnum:]_.-])dotnet[[:space:]]+ef[[:space:]]+database[[:space:]]+drop([[:space:]]|$)'; then
     printf 'ef-database-drop\n'
   fi
@@ -856,8 +964,9 @@ EOF
 # that fails or comes back empty prints unparsed and the next stage works on
 # the unprocessed text, so a broken tool never turns into "no label".
 _mk_cf_labels() {
-  local t n tok joined stripped views flat one _rm_scan _MK_CF_TEMP_OK=0 _MK_CF_TEMP_LIT=0 nl='
+  local t n tok joined stripped views flat one _rm_scan _MK_CF_TEMP_OK=0 _mk_cf_sre="$MK_CF_STATE_RE" _MK_CF_TEMP_LIT=0 nl='
 '
+  [ "${MK_CF_SESSION_MAIN:-0}" = 1 ] && _mk_cf_sre="$MK_CF_STATE_MAIN_RE"
   # careful-state first, before any other stage can fail, and also when the
   # command is too-large (approvable; careful-state never is): one grep -c on
   # the raw text, on it with quotes, backslashes and newlines deleted, and on
@@ -866,12 +975,17 @@ _mk_cf_labels() {
   if ! t="$(printf '%s' "$1" 2>/dev/null | LC_ALL=C tr -d "\\n\"'\\\\")" || _mk_cf_empty "$1" "$t"; then
     printf 'careful-state\nunparsed\n'; t=""
   fi
-  n="$(printf '%s\n%s\ncareful-grants\n' "$1" "$t" 2>/dev/null | grep -ciE "$MK_CF_STATE_RE")"
+  n="$(printf '%s\n%s\ncareful-grants\n' "$1" "$t" 2>/dev/null | grep -ciE "$_mk_cf_sre")"
   case "$n" in
     1) ;;
     ''|*[!0-9]*|0) printf 'careful-state\nunparsed\n' ;;
     *) printf 'careful-state\n' ;;
   esac
+  # main session: the convert-cache word beside a computed/temp token (t is
+  # the whole text on one line; an empty t was reported above)
+  if [ "${MK_CF_SESSION_MAIN:-0}" = 1 ] && [ "$n" = 1 ] && _mk_cf_cooc "${t:-$1}"; then
+    printf 'careful-state\n'
+  fi
   if _mk_cf_has "$MK_CF_STATE_GLOB_RE" "$1$nl$t" i; then printf 'careful-state-glob\n'; fi
   # Too large for the views: the literal computed-name test instead of the
   # write rule, so a long command does not turn a state write approvable;
@@ -928,7 +1042,13 @@ _mk_cf_labels() {
       _MK_CF_TEMP_OK=1; _MK_CF_TEMP_LIT=1
     fi
   fi
-  _mk_cf_wstate "$MK_CF_STATE_RE|$MK_CF_STATE_WRITE_RE" "$views"
+  # main session: the same co-occurrence on the views (the flat view can
+  # build a token t lacks: /tmp.exe/ -> /tmp/). A view-only hit is also
+  # reached through _mk_cf_wstate's tmpword ("careful") when a write hits.
+  if [ "${MK_CF_SESSION_MAIN:-0}" = 1 ] && [ "$n" = 1 ] && _mk_cf_cooc "$views"; then
+    printf 'careful-state\n'
+  fi
+  _mk_cf_wstate "$_mk_cf_sre|$MK_CF_STATE_WRITE_RE" "$views"
   if _mk_cf_has "$MK_CF_STATE_GLOB_RE" "$views" i; then printf 'careful-state-glob\n'; fi
   # The DYNRM exemption is decided ONCE, on the raw text: every view is ONE
   # segment (fork-free test; a flat view that could not be built: not single)

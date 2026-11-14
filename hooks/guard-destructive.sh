@@ -86,11 +86,13 @@ if [ -z "$PAYLOAD" ]; then
 fi
 
 # "T" sentinel: a jq that fails or prints anything else is not trusted.
-if ! tool="$(printf '%s' "$PAYLOAD" 2>/dev/null | jq -r '"T" + (.tool_name // "" | tostring)' 2>/dev/null)"; then
+if ! tool="$(printf '%s' "$PAYLOAD" 2>/dev/null | jq -r '"T" + (if (.agent_id // "") != "" then "S" else "M" end) + (.tool_name // "" | tostring)' 2>/dev/null)"; then
   deny "$(mk_msg CF_INVALID_JSON)"; exit 0
 fi
+sess_main=0 # never inherited from the environment
 case "$tool" in
-  T*) tool="${tool#T}" ;;
+  TM*) tool="${tool#TM}"; sess_main=1 ;;
+  TS*) tool="${tool#TS}" ;;
   *) deny "$(mk_msg CF_INVALID_JSON)"; exit 0 ;;
 esac
 
@@ -143,6 +145,8 @@ esac
 
 # shellcheck source-path=SCRIPTDIR source=lib/careful.sh
 . "$MK_LIB_DIR/careful.sh"
+# Main session (no agent_id), from the first jq: MK_CF_STATE_MAIN_RE (spec 0.8.2 A4).
+[ "${sess_main:-0}" = 1 ] && MK_CF_SESSION_MAIN=1
 nl='
 '
 tok="mk-sentinel-$$-$RANDOM-$RANDOM"

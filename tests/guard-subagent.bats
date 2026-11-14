@@ -262,6 +262,172 @@ EOF")"
     sub_denied_with 'configuration' "$c"
   done
 }
+@test "subagent: project deletion spellings are denied" {
+  mk_project "$SRCFG"
+  local b par rp
+  b="$(basename "$PROJ")"; par="$(dirname "$PROJ")"; rp="$(cd -P "$PROJ" && pwd -P)"
+  for c in 'rm -rf $PWD' 'rm -rf ${PWD}' 'rm -rf "$PWD"' 'rm -rf $PWD/' 'rm -rf ${PWD}/' 'rm -rf "${PWD}/"' \
+    'cd src && rm -rf $OLDPWD' 'rm -rf ${OLDPWD}' 'rm -rf ~+' 'rm -rf ~-' 'rm -rf "$(pwd)"' 'rm -rf `pwd`' \
+    'rm -rf $(pwd)/' "cd .. && rm -rf $b" "pushd ..; rm -rf $b" "eval \"rm -rf ../$b\"" "env rm -rf ../$b" \
+    "env -i FOO=1 rm -rf ../$b" "exec rm -rf ../$b" "builtin rm -rf ../$b" 'rm${IFS}-rf${IFS}$PWD' \
+    'rm${IFS}-rf${IFS}${PWD}/' "rm -rf $par" "rm -rf $rp" "cd .. && mv $b x" "pushd .. && mv $b $b-old" \
+    'find . -delete' "find $PROJ -delete" 'find .. -exec rm -rf {} +' 'find $PWD -delete' 'find -L . -delete' \
+    "find $par -execdir rm -rf {} +" 'find / -delete' \
+    'find . -name x -o -delete' 'find . -delete -o -name x' 'find . -delete , -name x' 'find . ! -name x -delete' \
+    'find . -not -name x -delete' 'find . -delete -name x' 'find . -mindepth 1 -delete' 'find . -maxdepth 2 -delete' \
+    'find . -exec sudo rm -rf {} +' 'find . -exec env rm -rf {} +' "find . -exec sh -c 'rm -rf \"\$1\"' _ {} \\;" \
+    'find . -exec shred {} +' 'find . -execdir unlink {} +' \
+    'mv $PWD /tmp/x' 'mv ~+ /tmp/x' 'mv $PWD/ /tmp/x' 'mv "$(pwd)" /tmp/x' 'mv ${PWD} /tmp/x' \
+    "rm -rf \$PWD/../$b" "rm -rf \${PWD}/../$b" "rm -rf \"\$PWD\"/../$b" "rm -rf ~+/../$b" \
+    "cd src && rm -rf \$OLDPWD/../$b" "find \$PWD/.. -delete" \
+    'rm -rf `pwd -P`' 'rm -rf ` pwd `' 'rm${IFS}-rf${IFS}`pwd`' 'rm -rf $(pwd -P)' 'rm -rf "$(cd . && pwd)"'; do
+    sub_denied_with 'configuration' "$c"
+  done
+}
+@test "subagent: shell keywords and xargs in front of a deletion do not hide it (final review I1)" {
+  mk_project "$SRCFG"
+  for c in 'if find . -delete; then :; fi' 'while find . -delete; do break; done' 'until find . -delete; do break; done' \
+    'if false; then :; elif find . -delete; then :; fi' 'if true; then find . -delete; fi' 'for d in a; do find . -delete; done' \
+    'if mv $PWD /tmp/x; then :; fi' 'if false; then :; elif mv $PWD /tmp/x; then :; fi' 'while mv $PWD /tmp/x; do break; done' \
+    'until mv $PWD /tmp/x; do break; done' 'if ! mv $PWD /tmp/x; then :; fi' 'coproc mv $PWD /tmp/x' \
+    'if rsync -a --delete /tmp/empty/ ./; then :; fi' 'if rm -rf $PWD; then :; fi' \
+    'echo /tmp/x | xargs mv $PWD' 'echo /tmp/x | xargs mv -f $PWD' 'ls | xargs -n1 mv ${PWD}'; do
+    sub_denied_with 'configuration' "$c"
+  done
+}
+@test "subagent: keywords and xargs leave the everyday shapes alone (final review I1)" {
+  mk_project "$SRCFG"
+  for c in 'if true; then rm -rf build; fi' 'while read f; do mv "$f" src/; done' 'if [ -d build ]; then rm -rf build dist; fi' \
+    'for f in *.log; do mv "$f" logs/; done' 'if mv a.txt b.txt; then :; fi' "if find . -name '*.pyc' -delete; then :; fi" \
+    'if cd src && rm -rf build; then :; fi' 'ls | xargs mv -t logs' 'echo a | xargs rm -f' 'if true; then cp a "$PWD/b"; fi' \
+    'if mv a $PWD; then :; fi' 'then_x=1; mv a b'; do
+    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
+    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+  done
+}
+@test "subagent: everyday removals stay allowed" {
+  mk_project "$SRCFG"
+  for c in 'cd src && rm -rf build' 'rm -rf build dist' 'rm -rf src/build' 'rm -rf "${PWD}/build"' 'rm -rf $PWD/build' \
+    'eval "$(direnv export bash)"' 'env FOO=1 npm test' 'cp a "$PWD/b"' "find . -name '*.pyc' -delete" \
+    "find . -name node_modules -prune -exec rm -rf {} +" 'find build -delete' 'find src -exec rm -rf {} +' \
+    'find . -type f -name x -delete' 'find . -print' 'echo $PWD' 'cd $OLDPWD' 'mv a.txt b.txt' 'mv a .' \
+    'rm -rf "$(pwd)/build"' 'cd src && mv a b' 'rm -rf `pwd`/build' \
+    'find . \( -name a -o -name b \) -delete' "find . -name '*.pyc' -delete -o -name __pycache__ -delete" \
+    'mv a $PWD' 'mv a.txt $PWD/' 'mv a "${PWD}/"' 'mv a "$(pwd)"' 'find . -exec echo {} +' 'rm -rf $PWD/../sibling'; do
+    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
+    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+  done
+}
+@test "subagent: find terminators and groups, flat parts of an ancestor, mv -t" {
+  mk_project "$SRCFG"
+  local par; par="$(dirname "$PROJ")"
+  for c in 'find . -exec find {} -delete \;' 'find . -exec find {} -delete +' "find . -exec sh -c 'find \"\$1\" -delete' _ {} \;" \
+    'find . -maxdepth 0 -exec find {} -delete \;' 'find . -exec true {} \; -delete' "find . -exec true {} ';' -delete" \
+    'find . -exec true {} ";" -delete' "find . -exec true {} \$';' -delete" 'find . -exec chmod u+w {} \; -delete' \
+    'find . ! \( -name x -o -name y \) -delete' 'find . -not \( -name x -o -name y \) -delete' \
+    'rm${IFS}-rf${IFS}$PWD${IFS}'"$par" '\rm -rf $PWD '"$par" 'mv -t /tmp/x $PWD' 'mv --target-directory=/tmp/x $PWD' \
+    'mv -t /tmp/x ~+' 'mv -S -t $PWD /tmp/x' 'mv --suffix -t $PWD /tmp/x' 'mv -bS -t $PWD /tmp/x' 'mv -S -t ~+ /tmp/x' \
+    'mv -- -t $PWD /tmp/x' 'mv -ft /tmp/x $PWD' 'mv -vt /tmp/x $PWD' 'mv -t/tmp/x $PWD'; do
+    sub_denied_with 'configuration' "$c"
+  done
+  for c in 'find build -exec true {} \; -delete' 'find . -name x -exec find {} -delete \;' 'mv -t /tmp/x a' \
+    'mv -t . a b' \
+    'rm -rf "${PWD}/build"' 'rm -rf $PWD/build' 'find . \( -name a -o -name b \) -delete'; do
+    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
+    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+  done
+}
+@test "subagent: mv with a pwd, root or ancestor word fails closed unless it is the plain last word" {
+  mk_project "$SRCFG"
+  mkdir -p "$PROJ/src"
+  local b par; b="$(basename "$PROJ")"; par="$(dirname "$PROJ")"
+  # S1 empty option values, S2 quoted words with blanks, S3 long-option
+  # prefixes and ANSI-C quoting, option words hidden by quotes or escapes.
+  for c in "mv -S '' \$PWD /tmp/x" 'mv -S "" $PWD /tmp/x' "mv --suffix '' \$PWD /tmp/x" "mv -S \$'' \$PWD /tmp/x" \
+    "mv -t '' \$PWD" "mv 'a -t' \$PWD /tmp/x" 'mv "x -S" $PWD /tmp/x' 'mv "-t" /tmp/x $PWD' "mv '--' -t /tmp/x \$PWD" \
+    "mv 'a b' -- \$PWD /tmp/x" 'mv --target=/tmp/x $PWD' 'mv --target /tmp/x $PWD' 'mv --targ=/tmp/x $PWD' \
+    'mv --t /tmp/x $PWD' 'mv --tar"get"=/tmp/x $PWD' "mv \$'-t' /tmp/x \$PWD" 'mv --suf -t $PWD /tmp/x' \
+    'mv --su -t $PWD /tmp/x' 'mv -\t /tmp/x $PWD' "mv -\$'t' /tmp/x \$PWD" 'mv -"t" /tmp/x $PWD' 'mv "-ft" /tmp/x $PWD' \
+    'mv -f\t /tmp/x $PWD' 'mv -tS $PWD' 'mv -St $PWD /tmp/x' 'mv -t /tmp/a -t /tmp/b $PWD' 'mv -t -- $PWD' \
+    'mv /tmp/x -t /tmp/y $PWD' 'mv $PWD /tmp/x -S' 'sudo mv -t /tmp/x $PWD' 'env mv -t /tmp/x $PWD' \
+    'env LC_ALL=C mv -ft /tmp/x $PWD' '\mv -t /tmp/x $PWD' '\mv -S -t $PWD /tmp/x' 'mv${IFS}-t${IFS}/tmp/x${IFS}$PWD' \
+    'mv -t /tmp/x "${PWD}/"' "cd .. && mv -t /tmp/x $b" "mv -t /tmp/x $par" 'mv -bS .bak -t /tmp/x ~+' \
+    '\mv $PWD /tmp/x' '\mv ~+ /tmp/x' 'mv${IFS}$PWD${IFS}/tmp/x' 'm\v ${PWD} /tmp/x' '"mv" $PWD /tmp/x' \
+    'find $PWD -maxdepth 0 -exec mv {} /tmp/x \;' 'find $PWD -maxdepth 0 -execdir mv {} /tmp/x \;' \
+    'find .. -maxdepth 1 -exec mv {} /tmp/x \;' 'find . -exec /bin/mv {} /tmp/x +' \
+    'mv -t $PWD a' 'mv -t $PWD a b' 'mv -S .bak -t $PWD a b' 'mv --target-directory=$PWD a' 'mv -bt $PWD a' \
+    'mv -b -S .bak a $PWD' 'mv --update a $PWD/'; do
+    sub_denied_with 'configuration' "$c"
+  done
+  for c in 'mv a $PWD' 'mv a.txt $PWD/' 'mv a b $PWD' 'mv -f a .' 'mv -t . a b' 'mv src/a src/b' 'mv -t /tmp/x .' \
+    'mv "${PWD}/build" /tmp/x' 'mv a "${PWD}/"' 'mv -Tf a $PWD' 'mv -- a $PWD' 'mv -f a ~+' 'mv -t "${PWD}/sub" a' \
+    "find . -name '*.bak' -exec mv {} old/ \;" 'find src -exec mv {} /tmp/x \;' 'mv "$PWD/a" "$PWD/b"'; do
+    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
+    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+  done
+}
+@test "subagent: flat pairs are counted per occurrence; mv globs, expansions, trailing redirects and options" {
+  mk_project "$SRCFG"
+  mkdir -p "$PROJ/src"
+  # 1: a glued spelling elsewhere in the command no longer covers a split one.
+  # 2: a non-last word that can expand to an option drops the last-word
+  # exemption. 3: a quoted # < > is an operand, and a word after a redirect
+  # is still one.
+  for c in '\mv $PWD /tmp/x # PWD/' '\mv $PWD /tmp/x; : PWD/' '\mv $PWD /tmp/x; echo ~+/' \
+    'mv "${PWD}/a" b; \mv $PWD /tmp/x' '\rm -rf $PWD /tmp/x # PWD/' '\mv $PWD /tmp/x # ${PWD}/' \
+    '\mv $PWD /tmp/x; : "${PWD}/"' '\rm -rf `pwd` /tmp/x' 'rm${IFS}-rf${IFS}$PWD${IFS}/tmp/x # PWD/' \
+    'mv -? /tmp/x $PWD' 'mv * $PWD' 'mv "$f" $PWD' 'mv *.log $PWD' 'mv $f ~+' 'mv ?t /tmp/x $PWD' \
+    'mv [-]t /tmp/x $PWD' 'mv -* /tmp/x $PWD' 'mv {-t,/tmp/x} $PWD' 'mv `echo -t` /tmp/x $PWD' \
+    'mv $(echo -t) /tmp/x $PWD' 'mv ${X:--t} /tmp/x $PWD' 'mv $X /tmp/x $PWD' 'X=-t; mv $X /tmp/x $PWD' \
+    'mv a >/dev/null $PWD /tmp/x' "mv a \$PWD '#x'" "mv a \$PWD '>x'" 'mv a $PWD \>x' "mv '#' \$PWD /tmp/x" \
+    'mv a $PWD "<x"' 'mv a $PWD > /dev/null /tmp/x' "\\mv $(dirname "$PROJ") /tmp/x; echo \"\${PWD}/\"" \
+    '\mv ~+ /tmp/x; echo "${PWD}/"' '\mv a $PWD /'; do
+    sub_denied_with 'configuration' "$c"
+  done
+  for c in 'mv "${PWD}/build" /tmp/x' '\mv "${PWD}/build" /tmp/x' 'rm -rf "$(pwd)/build"' 'rm -rf `pwd`/build' \
+    'eval "rm -rf ${PWD}/build"' 'cp a "${PWD}/x"; mv "${OLDPWD}/c" d' \
+    'mv build/* $PWD' 'mv src/*.log $PWD' 'mv *.log $PWD/logs' 'mv "$f" .' \
+    'mv a $PWD >/dev/null' 'mv a $PWD 2>/dev/null' 'mv a $PWD </dev/null' 'mv a $PWD # move' 'mv a $PWD > /dev/null' \
+    'mv a $PWD 2> err.log' 'mv a $PWD >/dev/null 2>&1' 'mv a $PWD &>/dev/null' \
+    'mv --target-directory="${PWD}/sub" a' 'mv --target-directory=${PWD}/sub a' 'mv -t"${PWD}/sub" a' \
+    'mv a "${PWD}/"' '\mv a "${PWD}/"' 'mv a "$(pwd)/"'; do
+    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
+    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+  done
+}
+@test "subagent: redirect and tab spellings, line continuation and home pairs in the config gate" {
+  mk_project "$SRCFG"
+  local T=$'\t' N=$'\n' c
+  export HOME="$(dirname "$PROJ")"
+  # C1: a & redirect keeps its target in the mv segment; C2: a tab before /x;
+  # I4: a backslash-newline joins words; I5: ~ / $HOME never take a flat /x.
+  for c in 'mv $PWD >&2 /tmp/x' 'mv $PWD 2>&1 /tmp/x' 'mv a $PWD 1>&2 /tmp/x' 'mv $PWD >&- /tmp/x' \
+    'mv -f $PWD >&2 /tmp/x' 'mv $PWD &>/dev/null /tmp/x' 'mv /tmp/a 2>&1 $PWD /tmp/x' 'mv -t /tmp/x 2>&1 $PWD' \
+    'rm -rf /tmp/a 2>&1 $PWD' 'find $PWD 2>&1 -delete' 'mv $PWD <&0 /tmp/x' 'mv a $PWD >' \
+    "\\mv \$PWD${T}/tmp/x" "\\mv \${PWD}${T}/tmp/x" "m\\v \$PWD${T}/tmp/x" "\\mv${T}\$PWD${T}/tmp/x" \
+    "\\mv \"\${PWD}\"${T}/b /tmp/x" \
+    "\\mv \$PWD \\${N}/tmp/x" "mv -t /tmp/x \\${N}\$PWD" "mv \\${N}\$PWD /tmp/x" \
+    '\mv ~ /tmp/x' '\mv $HOME /tmp/x' 'mv${IFS}~${IFS}/tmp/x' '\mv ${HOME} /tmp/x'; do
+    sub_denied_with 'configuration' "$c"
+  done
+  for c in 'mv a $PWD >/dev/null 2>&1' 'mv a $PWD 2>&1' 'mv a $PWD & echo done' 'sleep 1 & mv a $PWD' \
+    "mv${T}\"\${PWD}/build\"${T}/tmp/x" 'mv "${PWD}/build" /tmp/x' 'rm -rf "${HOME}/work"'; do
+    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
+    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+  done
+}
+@test "subagent: HOME spellings of an ancestor are denied, other home paths stay allowed" {
+  mk_project "$SRCFG"
+  export HOME="$(dirname "$PROJ")"
+  for c in 'rm -rf ~' 'rm -rf ~/' 'rm -rf $HOME' 'rm -rf ${HOME}' 'rm -rf "$HOME"' 'rm${IFS}-rf${IFS}${HOME}' \
+    'mv ~ /tmp/x' 'find ~ -delete' 'find $HOME -exec rm -rf {} +' "rm -rf ~/$(basename "$PROJ")"; do
+    sub_denied_with 'configuration' "$c"
+  done
+  for c in 'rm -rf ~/tmp/x' 'rm -rf $HOME/tmp/x' 'rm -rf "${HOME}/work"' 'mv a ~' 'cp a ~/b'; do
+    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
+    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+  done
+}
 @test "subagent: the config name allowlist lets plain reads through" {
   mk_project "$SRCFG"
   for c in 'cat .claude/memokit.json' 'jq . .claude/memokit.json' 'ls .claude' 'grep remote .claude/memokit.json | head -3' \
@@ -762,6 +928,17 @@ settings_denied() { # TOOL PATH
   tool_write Write "$CLAUDE_CONFIG_DIR/notes.md"
   [ "$(decision)" = "allow" ]
 }
+@test "0.8.2 C1: a CLAUDE_CONFIG_DIR holding a \\001 byte still triggers the cwd-in-config-dir glob rule" {
+  mk_settings
+  CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/c"$'\001'"Dx"
+  export CLAUDE_CONFIG_DIR
+  mkdir -p "$CLAUDE_CONFIG_DIR"
+  printf '{}\n' > "$CLAUDE_CONFIG_DIR/settings.json"
+  run_hook guard-subagent-authority.sh "$(jq -nc --arg c 'cp x ../*' --arg cwd "$CLAUDE_CONFIG_DIR" \
+    '{tool_name:"Bash",tool_input:{command:$c},cwd:$cwd,agent_id:"agent-1"}')"
+  [ "$(decision)" = "deny" ] || { echo "allowed: [$output]"; false; }
+  reason | grep -q 'may NOT change Claude Code settings' || { echo "wrong reason: $(reason)"; false; }
+}
 @test "settings fix 1: a bound hit inside the settings gate fails closed" {
   mk_settings
   # more than MK_GS_MAX_BASES cd targets
@@ -1224,6 +1401,51 @@ snap_file() { "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; mk_resolve_root '{}'; mk_
   [ "$(jq -r '[.hooks.PreToolUse[] | select((.matcher // "") | test("(^|\\|)Read(\\||$)")) | .hooks[].command] | join(" ")' "$MK_REPO/hooks/hooks.json")" = '"${CLAUDE_PLUGIN_ROOT}/hooks/convert-read.sh"' ]
 }
 
+@test "conversion cache: prose naming it is no state access in the main session; paths, globs and names still are (A4)" {
+  mk_project "$SRCFG"
+  local c d h
+  d="${TMPDIR%/}"
+  h="$(printf '%s' "$PROJ" | cksum | cut -d' ' -f1)"
+  for c in 'git commit -m "fix careful-convert cache naming"' 'grep -rn careful-convert hooks/' "echo 'about careful-convert' > notes.txt"; do
+    run_hook guard-destructive.sh "$(snap_bash "$c" s1 '')"
+    [ "$(decision)" = "allow" ] || { echo "main denied: $c [$(reason)]"; false; }
+  done
+  for c in "cat $d/memokit-$h-careful-convert/x" 'ls *careful-convert' "X=careful-convert; cp a $d/memokit-$h-\$X/b"; do
+    run_hook guard-destructive.sh "$(snap_bash "$c" s1 '')"
+    [ "$(decision)" = "deny" ] || { echo "main allowed: $c"; false; }
+    reason | grep -qF 'approval files are blocked' || { echo "main $c: $(reason)"; false; }
+  done
+  # a name the shell computes (or a memokit-/temp path) beside the word is state access
+  for c in 'X=careful-convert; cat $TMPDIR/memokit-1-$X/k/a.pdf.md' \
+           'X=careful-convert; sed -i s/a/b/ $TMPDIR/memokit-1-$X/k/a.pdf.md' \
+           'X=careful-convert; cd $TMPDIR/memokit-1-$X && echo forged > k/a.pdf.md' \
+           'X=careful-convert; perl -pi -e s/a/b/ $TMPDIR/memokit-1-$X/k/a.pdf.md' \
+           'X=careful-convert; cp -t $TMPDIR/memokit-1-$X/k src' \
+           'X=careful-convert; rsync src $TMPDIR/memokit-1-$X/k/' \
+           'X=careful-convert; rm -f $TMPDIR/memokit-1-$X/k/a.pdf.md' \
+           'X=careful-convert; rm -rf $TMPDIR/memokit-1-$X' \
+           'X="careful-convert"; sed -i s/a/b/ $TMPDIR/memokit-1-$X/k/a.pdf.md' \
+           ': ${X:=careful-convert}; sed -i s/a/b/ $TMPDIR/memokit-1-$X/k/a.pdf.md' \
+           'for X in careful-convert; do sed -i s/a/b/ $TMPDIR/memokit-1-$X/k/a.pdf.md; done' \
+           'echo careful-convert | xargs -I{} cp a /var/folders/x/T/memokit-1-{}'; do
+    run_hook guard-destructive.sh "$(snap_bash "$c" s1 '')"
+    [ "$(decision)" = "deny" ] || { echo "main allowed: $c"; false; }
+    reason | grep -qF 'approval files are blocked' || { echo "main $c: $(reason)"; false; }
+  done
+  # a subagent keeps the bare-word rule
+  for c in 'git commit -m "fix careful-convert"' 'grep -rn careful-convert hooks/'; do
+    run_hook guard-destructive.sh "$(snap_bash "$c" s1 agent-1)"
+    [ "$(decision)" = "deny" ] || { echo "sub allowed: $c"; false; }
+    reason | grep -qF 'approval files are blocked' || { echo "sub $c: $(reason)"; false; }
+  done
+}
+
+@test "conversion cache: an inherited sess_main=1 does not relax a subagent call (A4)" {
+  mk_project "$SRCFG"
+  sess_main=1 run_hook guard-destructive.sh "$(snap_bash 'git commit -m "fix careful-convert"' s1 agent-1)"
+  [ "$(decision)" = "deny" ] || { echo "allowed with env sess_main=1"; false; }
+}
+
 @test "snapshot: a Bash write to the snapshot is careful-state for main and subagent" {
   mk_project "$SRCFG"
   snap_start s1
@@ -1662,4 +1884,440 @@ mk_dogfood() {
   [ "$(decision)" = "allow" ] || { echo "denied: $(reason)"; false; }
   plugin_denied Write "$CK/hooks/a.sh"
   sub_denied_with "another plugin's installed files" "echo x > $CK/hooks/a.sh"
+}
+
+# 0.8.2 A1: a protected file reached through a link in a directory the guard
+# cannot stat (chmod 000) or whose name holds a blank.
+sub_cmd() { # CMD
+  run_hook guard-subagent-authority.sh "$(bash_payload "$1" agent-1)"
+}
+@test "plugins: a Bash write through a link in an unsearchable directory is denied" {
+  # (the file-level teardown restores the chmod-000 directory even when a step fails)
+  mk_plugins
+  mkdir -p "$PROJ/src/lockd"
+  ln -s "$PLUG/hooks/guard-edit.sh" "$PROJ/src/lockd/l.sh"
+  chmod 000 "$PROJ/src/lockd"
+  local c bad="" r1 r2
+  for c in 'echo x > src/lockd/l.sh' 'chmod 700 src/lockd && echo x > src/lockd/l.sh' 'echo x > src/lockd/sub/l.sh'; do
+    sub_cmd "$c"
+    [ "$(decision)" = "deny" ] || bad="$bad|allowed: $c"
+    reason | grep -qF "another plugin's installed files" || bad="$bad|wrong reason: $c"
+  done
+  tool_write Write src/lockd/l.sh
+  r1="$(decision)"; r2="$(reason)"
+  chmod 755 "$PROJ/src/lockd"
+  [ -z "$bad" ] || { echo "$bad"; false; }
+  [ "$r1" = deny ] || { echo "allowed: Write src/lockd/l.sh"; false; }
+  printf '%s' "$r2" | grep -qF "another plugin's installed files" || { echo "wrong reason: $r2"; false; }
+}
+@test "subagent: reading below an unsearchable directory is not a write" {
+  mk_plugins
+  mkdir -p "$PROJ/src/lockd"
+  chmod 000 "$PROJ/src/lockd"
+  local c bad=""
+  for c in 'ls src/lockd' 'cat src/lockd/x'; do
+    sub_cmd "$c"
+    [ "$(decision)" = "allow" ] || bad="$bad|denied: $c ($(reason))"
+  done
+  chmod 755 "$PROJ/src/lockd"
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+@test "plugins: a Bash write through a link in a directory with a blank is denied (plugin, settings, config)" {
+  mk_plugins
+  mkdir -p "$PROJ/src/sp ace" "$HOME/.claude"
+  printf '{}\n' > "$HOME/.claude/settings.json"
+  ln -s "$PLUG/hooks/guard-edit.sh" "$PROJ/src/sp ace/l.sh"
+  ln -s "$HOME/.claude/settings.json" "$PROJ/src/sp ace/s.json"
+  ln -s "$PROJ/.claude/memokit.json" "$PROJ/src/sp ace/m.json"
+  local f key
+  for f in l.sh:"another plugin's installed files" s.json:'may NOT change Claude Code settings' m.json:'configuration'; do
+    key="${f#*:}"; f="${f%%:*}"
+    for c in "echo x > \"src/sp ace/$f\"" "echo x > src/sp\\ ace/$f" "cd \"src/sp ace\" && echo x > $f" \
+      "cd src/sp\\ ace && echo x > $f" "cp /dev/null 'src/sp ace/$f'"; do
+      sub_cmd "$c"
+      [ "$(decision)" = "deny" ] || { echo "allowed: $c"; false; }
+      reason | grep -qF "$key" || { echo "wrong reason for $c: $(reason)"; false; }
+    done
+  done
+}
+@test "subagent: an unprotected path with a blank stays writable" {
+  mk_plugins
+  mkdir -p "$PROJ/src/my dir"
+  local c
+  for c in 'echo x > "src/my dir/a.txt"' 'echo x > src/my\ dir/a.txt' 'cd "src/my dir" && make' 'cd src/my\ dir && make'; do
+    sub_cmd "$c"
+    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+  done
+}
+
+# Carry I4 (controller ruling): a line continuation is judged as written and
+# joined; a backslash at the end of a comment, a quoted string or a heredoc
+# body must not hide the next line.
+@test "subagent: a trailing backslash in a comment, quote or heredoc does not hide the next line" {
+  mk_project "$SRCFG"
+  local N=$'\n' c
+  for c in "echo a # note \\${N}\\mv \$PWD /tmp/x" "echo 'a \\${N}b'; \\mv \$PWD /tmp/x" \
+    "cat <<'EOF'${N}body \\${N}EOF${N}\\mv \$PWD /tmp/x" "cat <<'EOF'${N}body \\${N}mv \$PWD /tmp/x${N}EOF" \
+    "\\mv \$PWD \\${N}/tmp/x" "mv -t /tmp/x \\${N}\$PWD" "mv \\${N}\$PWD /tmp/x"; do
+    sub_denied_with 'configuration' "$c"
+  done
+  for c in "make \\${N}  test" "echo a \\${N}b" "mv a b \\${N}c"; do
+    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
+    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+  done
+}
+
+# Fix round 1 (review of Task 3). A chmod-000 fixture must never outlive a
+# failing step: teardown restores it before bats removes the tree.
+teardown() {
+  [ -z "${PROJ:-}" ] || chmod -R u+rwx "$PROJ" 2>/dev/null || true
+}
+@test "subagent: a backslash-newline joins words with nothing between them" {
+  mk_plugins
+  local N=$'\n' c
+  mkdir -p "$PROJ/src/sp ace"
+  ln -s "$PLUG/hooks/guard-edit.sh" "$PROJ/src/sp ace/l.sh"
+  for c in "mv \$P\\${N}WD /tmp/x" "mv \$PW\\${N}D /tmp/x" "mv \${PW\\${N}D} /tmp/x" "m\\${N}v \$PWD /tmp/x" \
+    "mv -\\${N}t /tmp/x \$PWD" "find \$P\\${N}WD -delete"; do
+    sub_denied_with 'configuration' "$c"
+  done
+  for c in "echo x > \"src/sp ace/l.s\\${N}h\"" "echo x > \"src/sp\\${N} ace/l.sh\"" \
+    "echo x > src/sp\\ ace/l.s\\${N}h" "echo x > src/sp\\ ace/\\${N}l.sh"; do
+    sub_denied_with "another plugin's installed files" "$c"
+  done
+  for c in "make \\${N}  test" "echo a \\${N}b" "mv a b \\${N}c" "mv a \\${N}\$PWD" "cd src && mv a \\${N}b"; do
+    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
+    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+  done
+}
+@test "subagent: a leading redirection does not hide the command word" {
+  mk_project "$SRCFG"
+  local c
+  for c in '> f mv $PWD /tmp/x' '>f mv $PWD /tmp/x' '2>/dev/null mv $PWD /tmp/x' '</dev/null mv $PWD /tmp/x' \
+    '2>&1 mv $PWD /tmp/x' '>&2 mv $PWD /tmp/x' 'true && > f mv $PWD /tmp/x' 'true &&> f mv $PWD /tmp/x' \
+    'X=1 > f mv $PWD /tmp/x' '> f X=1 mv $PWD /tmp/x' '> f \mv $PWD /tmp/x' '>> f mv $PWD /tmp/x' \
+    '2> f rm -rf $PWD'; do
+    sub_denied_with 'configuration' "$c"
+  done
+  for c in '> f mv a b' '2>/dev/null mv a $PWD' '> f rm -rf build'; do
+    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
+    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+  done
+}
+@test "plugins: a tab in a blank-named directory does not defeat the link check" {
+  mk_plugins
+  local T=$'\t' c
+  mkdir -p "$PROJ/src/sp${T}ace"
+  ln -s "$PLUG/hooks/guard-edit.sh" "$PROJ/src/sp${T}ace/l.sh"
+  for c in "echo x > \"src/sp${T}ace/l.sh\"" "echo x > src/sp\\${T}ace/l.sh"; do
+    sub_cmd "$c"
+    [ "$(decision)" = "deny" ] || { echo "allowed: $c"; false; }
+  done
+}
+@test "plugins: ANSI-C words and \$PWD-prefixed paths reach the link checks" {
+  mk_plugins
+  mkdir -p "$PROJ/src/sp ace" "$PROJ/src/lockd" "$HOME/.claude"
+  printf '{}\n' > "$HOME/.claude/settings.json"
+  ln -s "$PLUG/hooks/guard-edit.sh" "$PROJ/src/sp ace/l.sh"
+  ln -s "$PLUG/hooks/guard-edit.sh" "$PROJ/src/l.sh"
+  ln -s "$PLUG/hooks/guard-edit.sh" "$PROJ/src/lockd/l.sh"
+  ln -s "$HOME/.claude/settings.json" "$PROJ/src/s.json"
+  ln -s "$PROJ/.claude/memokit.json" "$PROJ/src/m.json"
+  chmod 000 "$PROJ/src/lockd"
+  local c bad=""
+  for c in "echo x > \$'src/sp ace/l.sh'" "echo x > \$'src/l.sh'" "echo x > \$'src/s.json'" "echo x > \$'src/m.json'" \
+    "echo x > \$'src/l\\x2esh'" 'echo x > $PWD/src/l.sh' 'echo x > ${PWD}/src/l.sh' 'echo x > "$PWD"/src/l.sh' \
+    'echo x > $PWD/src/lockd/l.sh' 'echo x > "$PWD/src/sp ace/l.sh"' 'echo x > $PWD/src/s.json' 'echo x > $PWD/src/m.json'; do
+    sub_cmd "$c"
+    [ "$(decision)" = "deny" ] || bad="$bad|allowed: $c"
+  done
+  for c in 'echo x > "$PWD/notes.txt"' "echo x > \$'notes.txt'" 'echo x > $PWD/src/plain.txt'; do
+    sub_cmd "$c"
+    [ "$(decision)" = "allow" ] || bad="$bad|denied: $c ($(reason))"
+  done
+  chmod 755 "$PROJ/src/lockd"
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+
+# Final review I4: every new pipeline stage of the config gate proves that its
+# tool ran. A test-only stub fails (exit 1, or prints nothing with exit 0) for
+# exactly one program text and execs the real tool for every other call; the
+# gate must still deny.
+@test "subagent: a failing sed or grep stage of the config gate denies, it does not allow (final review I4)" {
+  mk_plugins
+  mkdir -p "$PROJ/src/sp ace"
+  ln -s "$PROJ/.claude/memokit.json" "$PROJ/src/m.json"
+  ln -s "$PROJ/.claude/memokit.json" "$PROJ/src/sp ace/m.json"
+  local stub="$BATS_TEST_TMPDIR/stub" realsed realgrep c body bad=""
+  realsed="$(command -v sed)"; realgrep="$(command -v grep)"
+  mkdir -p "$stub"
+  # shellcheck disable=SC2016  # stub scripts and sed program texts, not expansions
+  local sed_pat='*"s/>&/> /g"*|*"pwd[^)]*[)]/\$PWD/g"*|*MKFSEMI*|*"s/>[[:space:]]*[|]/> /g"*|*"s/[\$]'"'"'/'"'"'/g"*'
+  for c in 'mv $(pwd) /tmp/x' 'true 2>&1; mv $PWD /tmp/x' 'find $PWD -delete' 'echo \> | mv $PWD /tmp/x' 'echo x > $PWD/src/m.json'; do
+    sub_cmd "$c"
+    [ "$(decision)" = deny ] || { echo "without the stub, allowed: $c"; false; }
+  done
+  for body in 'cat >/dev/null; exit 1' 'cat >/dev/null; exit 0'; do
+    printf '#!/bin/bash\ncase "$*" in %s) %s ;; esac\nexec %s "$@"\n' "$sed_pat" "$body" "$realsed" > "$stub/sed"
+    chmod +x "$stub/sed"
+    for c in 'mv $(pwd) /tmp/x' 'true 2>&1; mv $PWD /tmp/x' 'find $PWD -delete' 'echo \> | mv $PWD /tmp/x' 'echo x > $PWD/src/m.json'; do
+      run env PATH="$stub:$PATH" "$MK_BASH" -c 'printf "%s" "$2" | "$0" "$1"' "$MK_BASH" "$HOOKS/guard-subagent-authority.sh" "$(bash_payload "$c" agent-1)"
+      [ "$(decision)" = deny ] || bad="$bad|sed '$body' allowed: $c"
+    done
+  done
+  rm -f "$stub/sed"
+  for c in 'echo x > "src/sp ace/m.json"' 'cd "src/sp ace" && echo x > m.json'; do
+    sub_cmd "$c"
+    [ "$(decision)" = deny ] || { echo "without the stub, allowed: $c"; false; }
+  done
+  for body in 'exit 2' 'exit 0'; do
+    printf '#!/bin/bash\ncase "$*" in *"[[:blank:]][^\\"]*\\"|"*) %s ;; esac\nexec %s "$@"\n' "$body" "$realgrep" > "$stub/grep"
+    chmod +x "$stub/grep"
+    for c in 'echo x > "src/sp ace/m.json"' 'cd "src/sp ace" && echo x > m.json'; do
+      run env PATH="$stub:$PATH" "$MK_BASH" -c 'printf "%s" "$2" | "$0" "$1"' "$MK_BASH" "$HOOKS/guard-subagent-authority.sh" "$(bash_payload "$c" agent-1)"
+      [ "$(decision)" = deny ] || bad="$bad|grep '$body' allowed: $c"
+    done
+  done
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+
+# Fix round 2 (re-review of Task 3).
+@test "subagent: every leading redirection spelling is skipped before the command word" {
+  mk_project "$SRCFG"
+  local c
+  for c in '10> f mv $PWD /tmp/x' '10>f mv $PWD /tmp/x' '{x}> f mv $PWD /tmp/x' '{x}>f mv $PWD /tmp/x' \
+    '>| f mv $PWD /tmp/x' '>|f mv $PWD /tmp/x' '{fd}>>f \mv $PWD /tmp/x' '12<f mv $PWD /tmp/x' '<> f mv $PWD /tmp/x'; do
+    sub_denied_with 'configuration' "$c"
+  done
+  for c in 'true | mv a b' 'echo x | tee f' 'ls >| f' '10> f mv a b'; do
+    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
+    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+  done
+}
+@test "plugins: every cwd spelling in a link path is folded; \$\"..\" words are literal" {
+  mk_plugins
+  mkdir -p "$PROJ/src" "$HOME/.claude"
+  printf '{}\n' > "$HOME/.claude/settings.json"
+  ln -s "$PLUG/hooks/guard-edit.sh" "$PROJ/src/l.sh"
+  ln -s "$HOME/.claude/settings.json" "$PROJ/src/s.json"
+  ln -s "$PROJ/.claude/memokit.json" "$PROJ/src/m.json"
+  local c bad=""
+  for c in "echo x > \${PWD}''/src/l.sh" "echo x > \${PWD}\$'/src/l.sh'" 'echo x > ${PWD:-.}/src/l.sh' \
+    'cd src && echo x > $OLDPWD/src/l.sh' 'echo x > ~+/src/l.sh' 'echo x > $(pwd)/src/l.sh' 'echo x > `pwd`/src/l.sh' \
+    'echo x > "$(pwd)/src/l.sh"' 'echo x > $(pwd -P)/src/l.sh' 'echo x > $"src/l.sh"' 'echo x > $"src/s.json"' \
+    'echo x > $"src/m.json"' 'PWD=/tmp; echo x > $PWD/src/l.sh' 'export PWD=/x; echo x > $PWD/src/l.sh'; do
+    sub_cmd "$c"
+    [ "$(decision)" = "deny" ] || bad="$bad|allowed: $c"
+  done
+  for c in 'echo x > "$PWD/notes.txt"' 'echo x > ./$PWD/src/l.sh' 'echo x > $"notes.txt"'; do
+    sub_cmd "$c"
+    [ "$(decision)" = "allow" ] || bad="$bad|denied: $c ($(reason))"
+  done
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+@test "subagent: ordinary \$'...' escapes stay allowed, path-byte escapes are denied as unparsed" {
+  mk_plugins
+  local c bad="" T=$'\t'
+  mkdir -p "$PROJ/src/sp ace" "$PROJ/src/sp${T}ace"
+  ln -s "$PLUG/hooks/guard-edit.sh" "$PROJ/src/sp ace/l.sh"
+  ln -s "$PLUG/hooks/guard-edit.sh" "$PROJ/src/sp${T}ace/l.sh"
+  ln -s "$PLUG/hooks/guard-edit.sh" "$PROJ/src/l.sh"
+  for c in "printf \$'a\\n' > f" "IFS=\$'\\n'; for f in *.txt; do wc -l \"\$f\"; done > counts.txt" \
+    "git log --format=\$'%h\\t%s' > log.txt" "echo \$'a\\tb' | tee f" "sed -i \$'s/a/\\\\tb/' src/x" \
+    "IFS=\$'\\n' read -r x < f" "echo \$'a\\n'"; do
+    sub_cmd "$c"
+    [ "$(decision)" = "allow" ] || bad="$bad|denied: $c ($(reason))"
+  done
+  for c in "echo x > \$'src/l\\x2esh'" "echo x > \$'src/sp\\tace/l.sh'" "echo x > \$'src/l\\056sh'"; do
+    sub_cmd "$c"
+    [ "$(decision)" = "deny" ] || bad="$bad|allowed: $c"
+  done
+  sub_cmd "echo x > \$'src/l\\x2esh'"
+  reason | grep -qi "too large\|could not\|parse" || bad="$bad|message: $(reason)"
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+
+# Fix round 3.
+@test "subagent: here-string, heredoc and clobber operators and exec wrappers do not hide the command word" {
+  mk_project "$SRCFG"
+  local N=$'\n' c
+  for c in '<<< x mv $PWD /tmp/x' "<< EOF mv \$PWD /tmp/x${N}EOF" "<<- EOF mv \$PWD /tmp/x${N}EOF" \
+    '>| f m\v $PWD /tmp/x' '>|f m\v $PWD /tmp/x' '>| f mv${IFS}$PWD${IFS}/tmp/x' '>| f mv $PWD /tmp/x' \
+    'timeout 10 mv $PWD /tmp/x' 'nice mv $PWD /tmp/x' '> f timeout 10 mv $PWD /tmp/x' 'nice -n 5 mv $PWD /tmp/x' \
+    'ionice -c 3 mv $PWD /tmp/x' 'stdbuf -oL mv $PWD /tmp/x' 'caffeinate mv $PWD /tmp/x' 'setsid mv $PWD /tmp/x' \
+    'doas mv $PWD /tmp/x' 'chrt 10 mv $PWD /tmp/x' 'unbuffer mv $PWD /tmp/x' 'timeout -s KILL -k 5 10 rm -rf $PWD' \
+    'timeout 10 find $PWD -delete'; do
+    sub_denied_with 'configuration' "$c"
+  done
+  for c in 'timeout 10 rm -rf build' 'nice -n 5 make' 'timeout 5 mv a b' '<<< x cat' 'nice -n 5 make test | tee log'; do
+    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
+    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+  done
+}
+@test "plugins: a SOH byte in a link directory name fails closed; more cwd spellings; PWD assignments" {
+  mk_plugins
+  local S=$'\001' c bad=""
+  mkdir -p "$PROJ/src/sp${S}ace"
+  ln -s "$PLUG/hooks/guard-edit.sh" "$PROJ/src/sp${S}ace/l.sh"
+  ln -s "$PLUG/hooks/guard-edit.sh" "$PROJ/src/l.sh"
+  for c in "echo x > src/sp${S}ace/l.sh" "echo x > \"src/sp${S}ace/l.sh\"" "cd src/sp${S}ace && echo x > l.sh" \
+    'cd src && echo x > ~-/src/l.sh' 'echo x > ${PWD}\/src/l.sh' 'read PWD < f; echo x > $PWD/src/l.sh' \
+    'printf -v PWD /x; echo x > $PWD/src/l.sh' 'PWD=/tmp; echo x > $PWD/src/l.sh' 'declare PWD=/x; echo x > $PWD/src/l.sh' \
+    'OLDPWD=/x; cd src && echo x > $OLDPWD/src/l.sh' 'X=1 PWD=/x; echo x > $PWD/src/l.sh'; do
+    sub_cmd "$c"
+    [ "$(decision)" = "deny" ] || bad="$bad|allowed: $c"
+  done
+  # accepted false positives (fix round 4): any PWD= in a writing command
+  for c in 'make PWD=/x' 'echo "PWD=$PWD" > env.txt' 'env PWD=/x cmd > f' 'docker run -e PWD=/x img > log'; do
+    sub_cmd "$c"
+    [ "$(decision)" = "deny" ] || bad="$bad|allowed: $c"
+  done
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+
+# Fix round 4.
+@test "subagent: a pipe after an escaped > and a blank-holding leading redirect target do not hide mv" {
+  mk_project "$SRCFG"
+  local c bad=""
+  for c in 'echo \> | mv $PWD /tmp/x' 'echo \>|mv $PWD /tmp/x' 'echo \>   |   mv $PWD /tmp/x' 'echo a\> | mv $PWD /tmp/x' \
+    '<<< "a b" mv $PWD /tmp/x' "<<< 'a b' mv \$PWD /tmp/x" '> "a b" mv $PWD /tmp/x' '2>"e f" mv $PWD /tmp/x'; do
+    sub_denied_with 'configuration' "$c"
+  done
+  for c in 'cmd | mv a b' 'echo x | tee f' "echo '>' | cat" 'mv a b >| log' \
+    'cd src && rm -rf build' 'rm -rf build dist' 'eval "$(direnv export bash)"' 'env FOO=1 npm test' 'cp a "$PWD/b"' \
+    "find . -name '*.pyc' -delete" 'find . -name node_modules -prune -exec rm -rf {} +' 'echo x > "src/my dir/a.txt"'; do
+    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
+    [ "$(decision)" = "allow" ] || bad="$bad|denied: $c ($(reason))"
+  done
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+@test "plugins: every PWD assignment spelling in a writing command fails closed" {
+  mk_plugins
+  local c N=$'\n' bad=""
+  ln -s "$PLUG/hooks/guard-edit.sh" "$PROJ/src/l.sh"
+  for c in 'if true; then PWD=$PWD/src; fi; echo x > $PWD/l.sh' 'while true; do PWD=$PWD/src; break; done; echo x > $PWD/l.sh' \
+    'true; else PWD=$PWD/src; echo x > $PWD/l.sh' 'if PWD=$PWD/src; then echo x > $PWD/l.sh; fi' '! PWD=$PWD/src; echo x > $PWD/l.sh' \
+    'time PWD=$PWD/src; echo x > $PWD/l.sh' 'coproc PWD=$PWD/src; echo x > $PWD/l.sh' 'eval PWD=$PWD/src; echo x > $PWD/l.sh' \
+    'eval "PWD=$PWD/src"; echo x > $PWD/l.sh' "eval 'PWD=\$PWD/src'; echo x > \$PWD/l.sh" 'X="a b" PWD=$PWD/src; echo x > $PWD/l.sh' \
+    'PWD+=/src; echo x > $PWD/l.sh' 'read	PWD < f; echo x > $PWD/l.sh' 'mapfile PWD < f; echo x > $PWD/l.sh' \
+    'readarray -t PWD < f; echo x > $PWD/l.sh' 'getopts a PWD; echo x > $PWD/l.sh'; do
+    sub_cmd "$c"
+    [ "$(decision)" = "deny" ] || bad="$bad|allowed: $c"
+  done
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+
+# Fix round 5.
+@test "subagent: a leading redirect target named like a judged command does not hide mv" {
+  mk_project "$SRCFG"
+  local c
+  for c in '> find mv $PWD /tmp/x' '2> find mv $PWD /tmp/x' '<<< find mv $PWD /tmp/x' '<< find mv $PWD /tmp/x' \
+    'nice > find mv $PWD /tmp/x' '> find \mv $PWD /tmp/x' '> find mv${IFS}$PWD${IFS}/tmp/x' '> "a b" mv $PWD /tmp/x' \
+    '> rm mv $PWD /tmp/x' '>find mv $PWD /tmp/x'; do
+    sub_denied_with 'configuration' "$c"
+  done
+}
+@test "plugins: a nameref to PWD in a writing command fails closed" {
+  mk_plugins
+  local c bad=""
+  ln -s "$PLUG/hooks/guard-edit.sh" "$PROJ/src/l.sh"
+  for c in 'declare -n r=PWD; r=$PWD/src; echo x > $PWD/l.sh' 'typeset -n r=PWD; r=$PWD/src; echo x > $PWD/l.sh' \
+    'local -n r=OLDPWD; r=/x; echo x > $PWD/l.sh'; do
+    sub_cmd "$c"
+    [ "$(decision)" = "deny" ] || bad="$bad|allowed: $c"
+  done
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+
+# Task 3 carry: blank quoted redirect targets, redirects inside skip regions.
+@test "subagent: a blank or empty quoted redirect target does not hide mv or find" {
+  mk_project "$SRCFG"
+  local c bad=""
+  for c in '> " " mv $PWD /tmp/x' "> ' ' mv \$PWD /tmp/x" '2>"  " mv $PWD /tmp/x' '>" " mv $PWD /tmp/x' "<<< ' ' mv \$PWD /tmp/x" \
+    '> "	" mv $PWD /tmp/x' 'nice > " " mv $PWD /tmp/x' '> " " \mv $PWD /tmp/x' '> " " mv${IFS}$PWD${IFS}/tmp/x' \
+    '> " " find $PWD -delete' "<<< '' mv \$PWD /tmp/x" '<<< "" mv $PWD /tmp/x'; do
+    sub_cmd "$c"
+    [ "$(decision)" = "deny" ] || bad="$bad|allowed: $c"
+  done
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+@test "subagent: a second redirect inside a skip region does not hide mv or find" {
+  mk_project "$SRCFG"
+  local c bad=""
+  for c in '> f > find mv $PWD /tmp/x' '> f 2> find mv $PWD /tmp/x' '> f < find mv $PWD /tmp/x' '2>&1 > find mv $PWD /tmp/x' \
+    '> "a b" > find mv $PWD /tmp/x' 'timeout 10 > find mv $PWD /tmp/x' 'nice -n 5 > find mv $PWD /tmp/x' 'timeout 10 2> find mv $PWD /tmp/x'; do
+    sub_cmd "$c"
+    [ "$(decision)" = "deny" ] || bad="$bad|allowed: $c"
+  done
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+@test "subagent: ordinary redirected commands stay allowed" {
+  mk_project "$SRCFG"
+  local c bad=""
+  for c in '> log rm -rf build' '2>&1 make' '>> log mv a b' '> f find . -name x -print' '>f find mv $PWD /tmp/x'; do
+    sub_cmd "$c"
+    [ "$(decision)" = "deny" ] && bad="$bad|denied: $c"
+  done
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+
+# Task 4: state-name anchoring (A3).
+@test "subagent: a project path that looks like a state name is ordinary" {
+  mk_project "$SRCFG"
+  # one level below the temp dir ($TMPDIR is $BATS_TEST_TMPDIR in tests): a
+  # directory named like a state file directly under it IS a state path
+  local base="$BATS_TEST_TMPDIR/w/memokit-12-careful-x"
+  mkdir -p "$base"
+  mv "$PROJ" "$base/p"
+  PROJ="$base/p"
+  export CLAUDE_PROJECT_DIR="$PROJ"
+  printf '%s' "$SRCFG" > "$PROJ/.claude/memokit.json"
+  tool_write Write "$PROJ/src/a.ts"
+  [ "$(decision)" = "allow" ] || { echo "denied: $(reason)"; false; }
+  tool_write Write "$PROJ/src/memokit-12-careful-y"
+  [ "$(decision)" = "allow" ] || { echo "denied name: $(reason)"; false; }
+  # the real state paths stay denied (also spelled with .. and a relative cwd)
+  tool_write Write "${TMPDIR%/}/memokit-12-careful-x/q"
+  [ "$(decision)" = "deny" ] || { echo "allowed state path"; false; }
+  tool_write Write "${TMPDIR%/}/src/../memokit-12-careful-x"
+  [ "$(decision)" = "deny" ] || { echo "allowed dotdot state path"; false; }
+}
+
+# Task 4 fix round 1: C1 (MKQ placeholder after eval), C2 (state dir by identity).
+@test "subagent: a blank quoted word after eval does not hide mv, rm or find" {
+  mk_project "$SRCFG"
+  local c bad=""
+  for c in 'eval "" mv $PWD /tmp/x' "eval '' mv \$PWD /tmp/x" 'eval " " mv $PWD /tmp/x' 'eval -- "" mv $PWD /tmp/x' \
+    'eval "" "mv $PWD /tmp/x"' 'eval "" find $PWD -delete' 'eval "" rm -rf $PWD' 'builtin eval "" mv $PWD /tmp/x' \
+    'command eval "" mv $PWD /tmp/x' 'time eval "" mv $PWD /tmp/x' 'nohup eval "" mv $PWD /tmp/x' 'eval "" \mv $PWD /tmp/x' \
+    'eval "" mv${IFS}$PWD${IFS}/tmp/x' 'eval "" "" mv $PWD /tmp/x' "eval \"\" '' mv \$PWD /tmp/x"; do
+    sub_cmd "$c"
+    [ "$(decision)" = "deny" ] || bad="$bad|allowed: $c"
+  done
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+@test "subagent: state paths under a firmlink or bind spelling of the temp dir are denied" {
+  mk_project "$SRCFG"
+  local real fl
+  real="$(cd -P "$TMPDIR" && pwd -P)"
+  fl="/System/Volumes/Data$real"
+  [ -e "$fl" ] || skip "no firmlink spelling of the temp dir on this system"
+  tool_write Write "$fl/memokit-12-careful-x"
+  [ "$(decision)" = "deny" ] || { echo "allowed firmlink state path"; false; }
+  tool_write Write "$fl/memokit-12-careful-x/q"
+  [ "$(decision)" = "deny" ] || { echo "allowed firmlink state dir child"; false; }
+}
+@test "subagent: state paths are denied under the physical spelling of a symlinked TMPDIR" {
+  mk_project "$SRCFG"
+  mkdir -p "$BATS_TEST_TMPDIR/phys/src"
+  ln -s "$BATS_TEST_TMPDIR/phys" "$BATS_TEST_TMPDIR/lnk"
+  export TMPDIR="$BATS_TEST_TMPDIR/lnk"
+  local real
+  real="$(cd -P "$TMPDIR" && pwd -P)"
+  tool_write Write "$real/memokit-12-careful-x"
+  [ "$(decision)" = "deny" ] || { echo "allowed physical state path"; false; }
+  tool_write Write "$TMPDIR/memokit-12-careful-x"
+  [ "$(decision)" = "deny" ] || { echo "allowed symlink state path"; false; }
+  tool_write Write "$real/src/memokit-12-careful-x"
+  [ "$(decision)" = "allow" ] || { echo "denied non-state path: $(reason)"; false; }
 }

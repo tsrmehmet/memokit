@@ -83,3 +83,12 @@ keys() { grep -o '^MK_T_[A-Z0-9_]*' "$HOOKS/messages/$1.sh" | sort; }
   done
   [ "$n" -eq 10 ]
 }
+
+@test "CF_STATE text keeps its marker and tells how to read the cache and word a commit message (A5)" {
+  grep -q '^MK_T_CF_STATE=.*approval files are blocked' "$HOOKS/messages/en.sh"
+  grep -q '^MK_T_CF_STATE=.*Read' "$HOOKS/messages/en.sh"
+  grep -q '^MK_T_CF_STATE=.*git commit -F' "$HOOKS/messages/en.sh"
+  grep -q '^MK_T_CF_STATE=.*onay dosyalarına dokunan komutlar engellenir' "$HOOKS/messages/tr.sh"
+  grep -q '^MK_T_CF_STATE=.*Read' "$HOOKS/messages/tr.sh"
+  grep -q '^MK_T_CF_STATE=.*git commit -F' "$HOOKS/messages/tr.sh"
+}

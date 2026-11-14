@@ -1084,6 +1084,106 @@ b"; clear_alerts
   block_reason | grep -qF "$L_PL" || { echo "re-added: [$output]"; false; }
 }
 
+# 0.8.2 (B2): a record binds a link (f -> s), not a point. Outer call X spans
+# parallel calls Y and Z, each with a prompt of its own; every Post walks the
+# links from its own Pre stamp. Helper: Pre of X, Y, Z; Y's rule A written;
+# Z's rule B written on top (Y's Post, when asked for, comes between).
+chain_two() {
+  ig PreToolUse Bash agent-1 tuX
+  ig PreToolUse Bash agent-2 tuY
+  ig PreToolUse Bash agent-3 tuZ
+  perm_req Bash "$(sugg Bash 'npm test')"
+  local_allow '["Bash(npm test)"]'
+  [ "$1" != y ] || { ig PostToolUse Bash agent-2 tuY; [ -z "$output" ] || { echo "Y: [$output]"; false; }; }
+  perm_req Bash "$(sugg Bash 'npm run lint')"
+  local_allow '["Bash(npm test)","Bash(npm run lint)"]'
+}
+
+@test "integrity (R2): two prompted rules in parallel calls inside one outer call give a notice" {
+  chain_two y
+  ig PostToolUse Bash agent-3 tuZ
+  [ -z "$output" ] || { echo "Z: [$output]"; false; }
+  ig PostToolUse Bash agent-1 tuX
+  [ -z "$output" ] || { echo "X: [$output]"; false; }
+  grep -qF 'Bash(npm test)' "$(marker_path allow)" && grep -qF 'Bash(npm run lint)' "$(marker_path allow)" || { cat "$(marker_path allow)"; false; }
+  [ ! -e "$(marker_path alert)" ] || { cat "$(marker_path alert)"; false; }
+  # the same shape with the Posts the other way round
+  clear_alerts; rm -f "$TMPDIR"/memokit-*-careful-integrity-perm-* "$PROJ/.claude/settings.local.json"
+  chain_two y
+  ig PostToolUse Bash agent-1 tuX
+  [ -z "$output" ] || { echo "X first: [$output]"; false; }
+  ig PostToolUse Bash agent-3 tuZ
+  [ -z "$output" ] || { echo "Z last: [$output]"; false; }
+}
+
+@test "integrity (R2): a removal between links is the full alert" {
+  chain_two y
+  ig PostToolUse Bash agent-3 tuZ
+  [ -z "$output" ] || { echo "Z: [$output]"; false; }
+  # removed and added again: a stamp no link starts from
+  rm -f "$PROJ/.claude/settings.local.json"
+  local_allow '["Bash(npm test)","Bash(npm run lint)"]'
+  ig PostToolUse Bash agent-1 tuX
+  block_reason | grep -qF "$L_PL" || { echo "replay: [$output]"; false; }
+}
+
+@test "integrity (R2): two links from one stamp (a branch) are the full alert" {
+  local f
+  chain_two y
+  ig PostToolUse Bash agent-3 tuZ
+  [ -z "$output" ] || { echo "Z: [$output]"; false; }
+  f="$(perm_file)"
+  # the second record leaves the first one's stamp too (a branch), listed first
+  jq -c -s '(.[0].f) as $p | (.[1] + {f: $p}), .[0]' "$f" > "$f.n" && mv "$f.n" "$f"
+  ig PostToolUse Bash agent-1 tuX
+  block_reason | grep -qF "$L_PL" || { echo "branch: [$output]"; false; }
+}
+
+# The shape of r4b itself: Z's Pre comes after A is written, so Z's diff is
+# only B and its link starts at a stamp no walked link leads to.
+@test "integrity (R2): a second call that starts after the first prompt's change chains too" {
+  ig PreToolUse Bash agent-1 tuX
+  ig PreToolUse Bash agent-2 tuY
+  perm_req Bash "$(sugg Bash 'npm test')"
+  local_allow '["Bash(npm test)"]'
+  ig PostToolUse Bash agent-2 tuY
+  [ -z "$output" ] || { echo "Y: [$output]"; false; }
+  ig PreToolUse Bash agent-3 tuZ
+  perm_req Bash "$(sugg Bash 'npm run lint')"
+  local_allow '["Bash(npm test)","Bash(npm run lint)"]'
+  ig PostToolUse Bash agent-3 tuZ
+  [ -z "$output" ] || { echo "Z: [$output]"; false; }
+  ig PostToolUse Bash agent-1 tuX
+  [ -z "$output" ] || { echo "X: [$output]"; false; }
+  grep -qF 'Bash(npm test)' "$(marker_path allow)" && grep -qF 'Bash(npm run lint)' "$(marker_path allow)" || { cat "$(marker_path allow)"; false; }
+  [ ! -e "$(marker_path alert)" ] || { cat "$(marker_path alert)"; false; }
+}
+
+@test "integrity (R2): an unrecorded rule beside a recorded chain is the full alert" {
+  chain_two y
+  ig PostToolUse Bash agent-3 tuZ
+  [ -z "$output" ] || { echo "Z: [$output]"; false; }
+  local_allow '["Bash(npm test)","Bash(npm run lint)","Bash(other)"]'
+  ig PostToolUse Bash agent-1 tuX
+  block_reason | grep -qF "$L_PL" || { echo "unrecorded: [$output]"; false; }
+}
+
+@test "integrity (R2): a record of the 0.8.1 format (only s) backs its change as before" {
+  local f
+  ig PreToolUse Bash agent-1 tu1
+  ig PreToolUse Bash agent-2 tu2
+  perm_req Bash "$(sugg Bash 'npm test')"
+  f="$(perm_file)"
+  local_allow '["Bash(npm test)"]'
+  ig PostToolUse Bash agent-1 tu1
+  [ -z "$output" ] || { echo "first: [$output]"; false; }
+  jq -e '.f | type == "string"' "$f" >/dev/null || { cat "$f"; false; }
+  # the same record without f: a 0.8.1 binding, the second Post still holds
+  jq -c 'del(.f)' "$f" > "$f.n" && mv "$f.n" "$f"
+  ig PostToolUse Bash agent-2 tu2
+  [ -z "$output" ] || { echo "legacy: [$output]"; false; }
+}
+
 # CI fix (0.8.1): on Linux the stamp's ctime was in seconds, and ext4 gives a
 # re-created file the inode just freed: the same rule removed and added
 # again within that second, same size and mode, had the first change's
@@ -1129,6 +1229,63 @@ b"; clear_alerts
   ig PostToolUse Bash agent-1 tu2
   [ -z "$output" ] || { echo "stale lock: [$output]"; false; }
   [ ! -e "$f.lock" ] || { echo "lock left behind"; false; }
+}
+
+# 0.8.2 (B1): two takers must not both remove a stale lock (the late rmdir
+# would remove a fresh one): takers are serialised by FILE.lock.t.
+@test "integrity (R2): a stale lock with a takeover in progress is not removed" {
+  local f
+  ig PreToolUse Bash agent-1 tu1
+  perm_req Bash "$(sugg Bash 'npm test')"
+  f="$(perm_file)"; [ -n "$f" ]
+  mkdir "$f.lock" "$f.lock.t"
+  touch -t 202001010000 "$f.lock" "$f.lock.t"
+  local_allow '["Bash(npm test)"]'
+  ig PostToolUse Bash agent-1 tu1
+  block_reason | grep -qF "$L_PL" || { echo "takeover in progress: [$output]"; false; }
+  [ -d "$f.lock" ] || { echo "lock removed while another taker held the mutex"; false; }
+}
+
+@test "integrity (R2): a lock that turns fresh during takeover survives" {
+  local f stub="$BATS_TEST_TMPDIR/statstub" real
+  real="$(command -v stat)"
+  mkdir -p "$stub"
+  # the first mtime read says "old", every later one is the real one
+  printf '#!/bin/sh\nc="%s/n"\nfor a; do case "$a" in %%m|%%Y) if [ ! -e "$c" ]; then : > "$c"; echo 1000; exit 0; fi ;; esac; done\nexec %s "$@"\n' "$BATS_TEST_TMPDIR" "$real" > "$stub/stat"
+  chmod +x "$stub/stat"
+  ig PreToolUse Bash agent-1 tu1
+  perm_req Bash "$(sugg Bash 'npm test')"
+  f="$(perm_file)"; [ -n "$f" ]
+  mkdir "$f.lock"
+  local_allow '["Bash(npm test)"]'
+  PATH="$stub:$PATH" ig PostToolUse Bash agent-1 tu1
+  [ -e "$BATS_TEST_TMPDIR/n" ] || { echo "stub never asked"; false; }
+  block_reason | grep -qF "$L_PL" || { echo "fresh lock: [$output]"; false; }
+  [ -d "$f.lock" ] || { echo "a fresh lock was removed"; false; }
+  [ ! -e "$f.lock.t" ] || { echo "takeover mutex left behind"; false; }
+}
+
+@test "integrity (R2): a directory that cannot be stat'ed is not old" {
+  run "$MK_BASH" -c '. "$1/lib/common.sh"; . "$1/lib/integrity.sh"; _mk_ig_old "$2"' _ "$IH" "$BATS_TEST_TMPDIR/missing"
+  [ "$status" = 1 ] || { echo "status $status [$output]"; false; }
+}
+
+# 0.8.2 (B3): a lock another user made is not ours to wait for or remove.
+@test "integrity (R2): a foreign lock fails at once" {
+  local f t0 t1
+  sudo -n true 2>/dev/null || skip "needs passwordless sudo"
+  ig PreToolUse Bash agent-1 tu1
+  perm_req Bash "$(sugg Bash 'npm test')"
+  f="$(perm_file)"; [ -n "$f" ]
+  sudo -n mkdir "$f.lock"
+  local_allow '["Bash(npm test)"]'
+  t0="$(perl -MTime::HiRes=time -e 'printf "%d", time*1000')"
+  ig PostToolUse Bash agent-1 tu1
+  t1="$(perl -MTime::HiRes=time -e 'printf "%d", time*1000')"
+  sudo -n rmdir "$f.lock"
+  block_reason | grep -qF "$L_PL" || { echo "foreign lock: [$output]"; false; }
+  # the sleep path costs at least 10 x 100 ms; 1000 ms still tells it apart and leaves room for CI runner noise
+  [ $((t1 - t0)) -lt 1000 ] || { echo "took $((t1 - t0)) ms"; false; }
 }
 
 @test "integrity (R2): two concurrent Posts with different post-change stamps: at most one is backed by the record" {
