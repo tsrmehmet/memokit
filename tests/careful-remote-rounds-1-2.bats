@@ -62,7 +62,7 @@ deploy-push|branch:deploy|git push origin main:heads/deploy
 deploy-push|branch:deploy|git push origin main:refs/heads/deploy
 deploy-push|branch:deploy|git push origin x:foo/deploy
 remote-mutate|host:prod.example.com|ssh a@b@prod.example.com reboot
-remote-mutate|host:31.210.53.162|scp f root@[31.210.53.162]:/tmp/
+remote-mutate|host:203.0.113.162|scp f root@[203.0.113.162]:/tmp/
 remote-mutate|host:prod.example.com|sftp -o Hostname=prod.example.com x
 remote-mutate|host:prod.example.com|sftp -oHostname=prod.example.com x:/a ./b
 remote-mutate|host:prod.example.com|ssh prod.example.com. reboot

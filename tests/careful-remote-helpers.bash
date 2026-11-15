@@ -1,7 +1,7 @@
 # Shared helpers for tests/careful-remote-*.bats (loaded after helpers).
 RCFG='{"version":1,"project":{"name":"D","tag":"DMO"},"language":"en",
 "careful":{"patterns":[{"match":"flyctl deploy","label":"fly","target":"fly-prod"}]},
-"remote":{"deployBranches":["deploy","public-release"],"hosts":["31.210.53.162","prod.example.com"],"readOnlyFirstWords":["pm2-list"]}}'
+"remote":{"deployBranches":["deploy","public-release"],"hosts":["203.0.113.162","prod.example.com"],"readOnlyFirstWords":["pm2-list"]}}'
 RB=.claude/memokit/runbooks/deploy.sh
 
 # rlib CODE ARG... -- run CODE with common.sh, careful.sh and remote.sh loaded.

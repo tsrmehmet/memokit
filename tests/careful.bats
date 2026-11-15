@@ -31,9 +31,9 @@ load_remote() {
 }
 
 @test "remote config: loads with defaults; absent → disabled" {
-  mk_project "$(cfg '"remote":{"deployBranches":["deploy"],"hosts":["31.210.53.162","*"]}')"
+  mk_project "$(cfg '"remote":{"deployBranches":["deploy"],"hosts":["203.0.113.162","*"]}')"
   load_remote   # prints ENABLED|HOSTS|WINDOW|RUNBOOKS
-  [ "$output" = "1|31.210.53.162
+  [ "$output" = "1|203.0.113.162
 *|30|.claude/memokit/runbooks" ]
   mk_project; load_remote; [ "${output%%|*}" = "0" ]
 }

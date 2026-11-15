@@ -43,8 +43,8 @@ EOF
 @test "remote-mutate: hosts in every spelling; read-only, download and dry-run exempt" {
   mk_project "$RCFG"
   check_table <<'EOF'
-remote-mutate|host:31.210.53.162|ssh root@31.210.53.162 'systemctl restart app'
-remote-mutate|host:31.210.53.162|rsync -az ./ 'root@31.210.53.162:/opt/app/'
+remote-mutate|host:203.0.113.162|ssh root@203.0.113.162 'systemctl restart app'
+remote-mutate|host:203.0.113.162|rsync -az ./ 'root@203.0.113.162:/opt/app/'
 remote-mutate|host:prod.example.com|scp build.tgz prod.example.com:/tmp/
 remote-mutate|host:prod.example.com|ssh -p 2222 -o StrictHostKeyChecking=no prod.example.com 'pm2 restart app'
 remote-mutate|host:prod.example.com|ssh prod.example.com 'systemctl status app; rm -rf /srv'
@@ -121,7 +121,7 @@ EOF
   done <<EOF
 git push origin deploy
 gh pr merge 12 --squash
-ssh root@31.210.53.162 'systemctl restart app'
+ssh root@203.0.113.162 'systemctl restart app'
 kubectl --context staging apply -f k.yaml
 helm upgrade app ./chart
 bash $RB prod
@@ -165,8 +165,8 @@ EOF
   strip 'ssh prod.example.com reboot && git push origin deploy' 'host:prod.example.com
 branch:deploy'
   [ -z "$(trim "$output")" ]
-  strip 'ssh 31.210.53.162 reboot' 'host:prod.example.com'
-  [ "$(trim "$output")" = 'ssh 31.210.53.162 reboot' ]
+  strip 'ssh 203.0.113.162 reboot' 'host:prod.example.com'
+  [ "$(trim "$output")" = 'ssh 203.0.113.162 reboot' ]
 }
 
 @test "target_valid accepts configured, rejects unknown and bad spelling" {
@@ -177,7 +177,7 @@ branch:deploy'
   bad() { valid "$1"; [ "$status" -eq 1 ] || { echo "accepted: $1 ($status)"; return 1; }; }
   ok host:prod.example.com
   ok host:PROD.example.com
-  ok host:31.210.53.162
+  ok host:203.0.113.162
   bad host:evil
   ok branch:deploy
   bad branch:main

@@ -25,7 +25,7 @@
   },
   "remote": {
     "deployBranches": ["deploy", "public-release"],
-    "hosts": ["31.210.53.162", "prod.example.com"],
+    "hosts": ["203.0.113.162", "prod.example.com"],
     "readOnlyFirstWords": ["pm2-list", "pm2-status"],
     "windowMinutes": 30,
     "runbooksDir": ".claude/memokit/runbooks",

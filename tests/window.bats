@@ -180,7 +180,7 @@ second line"; mk_careful_window_get s1; echo "get=$?"; mk_careful_window_failed 
 # code for main-session denies.
 
 WCFG='{"version":1,"project":{"name":"D","tag":"DMO"},"language":"en",
-"remote":{"deployBranches":["deploy","public-release"],"hosts":["31.210.53.162","prod.example.com"],"windowMinutes":30}}'
+"remote":{"deployBranches":["deploy","public-release"],"hosts":["203.0.113.162","prod.example.com"],"windowMinutes":30}}'
 WSID="sess-0001"
 
 # tp CMD [TOOL_USE_ID] [EXTRA_JSON] -- Bash payload with session, transcript
@@ -286,21 +286,21 @@ ssh prod.example.com 'systemctl restart z'" toolu_03
 @test "deny: extra target -> CF_REMOTE_EXTRA names it" {
   mk_project "$WCFG"
   open_window 'host:prod.example.com'
-  gd "ssh 31.210.53.162 'systemctl restart x'" toolu_05
+  gd "ssh 203.0.113.162 'systemctl restart x'" toolu_05
   [ "$(decision)" = deny ]
   r="$(reason)"
-  printf '%s' "$r" | grep -qF 'does not cover host:31.210.53.162' || { echo "$r"; false; }
+  printf '%s' "$r" | grep -qF 'does not cover host:203.0.113.162' || { echo "$r"; false; }
   c="$(code_of "$r")"
-  lib "mk_careful_targets_code 'host:31.210.53.162'"
+  lib "mk_careful_targets_code 'host:203.0.113.162'"
   [ "$output" = "$c" ]
   lib "mk_careful_pending_get $WSID $c"
   [ "$status" -eq 0 ]
   marker toolu_05; [ "$status" -eq 1 ]
   # two targets, one covered: only the missing one is named, the code is for both
-  gd "ssh 31.210.53.162 'systemctl restart x' && ssh prod.example.com 'systemctl restart x'" toolu_06
+  gd "ssh 203.0.113.162 'systemctl restart x' && ssh prod.example.com 'systemctl restart x'" toolu_06
   r="$(reason)"
-  printf '%s' "$r" | grep -qF 'does not cover host:31.210.53.162:' || { echo "$r"; false; }
-  lib "mk_careful_targets_code 'host:31.210.53.162
+  printf '%s' "$r" | grep -qF 'does not cover host:203.0.113.162:' || { echo "$r"; false; }
+  lib "mk_careful_targets_code 'host:203.0.113.162
 host:prod.example.com'"
   [ "$(code_of "$r")" = "$output" ]
 }
@@ -449,7 +449,7 @@ in_window_denied() {
     [ "$status" -eq 1 ] || { echo "marker written for: $c"; return 1; }
   done
 }
-all_targets='host:31.210.53.162
+all_targets='host:203.0.113.162
 host:prod.example.com
 branch:deploy
 branch:public-release
@@ -761,7 +761,7 @@ k8s'
     "ssh -o 'User=x;' prod.example.com 'systemctl restart x'" \
     "ssh -o 'ProxyCommand=x|y' prod.example.com z" \
     "rsync -e 'ssh -p 22; rm -rf /' ./ prod.example.com:/x" \
-    "ssh -o Hostname=31.210.53.162 prod.example.com 'systemctl restart x'" \
+    "ssh -o Hostname=203.0.113.162 prod.example.com 'systemctl restart x'" \
     "ssh -o HostName=prod.example.com prod.example.com 'systemctl restart x'" \
     "ssh '-o ProxyCommand=x' prod.example.com y" \
     "ssh '-oUser=a' prod.example.com 'systemctl restart x'" \
@@ -1639,7 +1639,7 @@ flag_of() { lib "mk_careful_pending_get $WSID"; set -- $output; printf '%s' "$2"
 @test "request: a line already flagged stays flagged on a request, whoever wrote it" {
   mk_project "$WCFG"
   gd "ssh prod.example.com 'systemctl restart x'"
-  gd "ssh 31.210.53.162 'systemctl restart x'"
+  gd "ssh 203.0.113.162 'systemctl restart x'"
   case "$(flag_of)" in *'!') ;; *) false ;; esac
   req request branch:deploy
   case "$(flag_of)" in *'!') ;; *) false ;; esac

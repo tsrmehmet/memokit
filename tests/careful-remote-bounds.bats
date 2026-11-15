@@ -102,7 +102,7 @@ echo $i"; i=$((i + 1)); done
   check_table <<EOF
 remote-mutate|host:prod.example.com|s\\sh pro\\d.example.com 'systemctl restart x'
 remote-mutate|host:prod.example.com|s""sh pr""od.example.com 'systemctl restart x'
-remote-mutate|host:31.210.53.162|s\\sh 31.210.53\\.162 'systemctl restart x'
+remote-mutate|host:203.0.113.162|s\\sh 203.0.113\\.162 'systemctl restart x'
 deploy-push|branch:deploy|gi\\t push origin de\\ploy
 deploy-push|branch:deploy|g""it push origin dep""loy
 deploy-push|branch:deploy|gi\\t push origin HEAD:refs/heads/dep""loy

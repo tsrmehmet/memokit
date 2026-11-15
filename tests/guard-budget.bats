@@ -9,7 +9,7 @@ load helpers
 
 BCFG='{"version":1,"project":{"name":"D","tag":"DMO"},"language":"en","guardedDirs":["src","tests"],
 "careful":{"patterns":[{"match":"flyctl deploy","label":"fly","target":"fly-prod"}]},
-"remote":{"deployBranches":["deploy","public-release"],"hosts":["31.210.53.162","prod.example.com"],"readOnlyFirstWords":["pm2-list"]}}'
+"remote":{"deployBranches":["deploy","public-release"],"hosts":["203.0.113.162","prod.example.com"],"readOnlyFirstWords":["pm2-list"]}}'
 
 # tr_TR.UTF-8 when the machine has it (macOS, the user's locale); a missing
 # locale would make bash and perl print setlocale warnings into the hook
