@@ -44,6 +44,26 @@ hook_file() {
   ms=$((t1 - t0))
   cpu="$(tr ',' '.' < "$tf" 2>/dev/null | LC_ALL=C awk 'NF == 2 { printf "%d", ($1 + $2) * 1000 }')"
   cpu="${cpu:-99999}"
+  # A reading at or past the 2 s bound is measured again, up to twice, and
+  # the smallest cpu reading counts. A shared CI runner now and
+  # then charges one run several times its usual CPU (the same fixture reads
+  # 300 ms and 3000 ms in two runs of the same commit); a superlinear
+  # blow-up is slow on every run, so the minimum still catches it. The bound
+  # itself does not move. output, status and ms stay those of the first run.
+  local i c2 m2
+  for i in 1 2; do
+    [ "$cpu" -ge 2000 ] || break
+    rm -f "$tf"
+    t0="$(perl -MTime::HiRes=time -e 'printf "%d", time * 1000')"
+    perl -e 'alarm 10; exec @ARGV' "$MK_BASH" -c 'TIMEFORMAT="%U %S"; { time "$0" "$1" < "$2" > /dev/null 2>&1; } 2> "$3"' \
+      "$MK_BASH" "$HOOKS/$1" "$pl" "$tf" || true
+    t1="$(perl -MTime::HiRes=time -e 'printf "%d", time * 1000')"
+    m2=$((t1 - t0))
+    c2="$(tr ',' '.' < "$tf" 2>/dev/null | LC_ALL=C awk 'NF == 2 { printf "%d", ($1 + $2) * 1000 }')"
+    c2="${c2:-99999}"
+    echo "$(basename "$2"): ${cpu} ms cpu at the bound, measured again: ${c2} ms cpu (${m2} ms wall)" >&3
+    [ "$c2" -ge "$cpu" ] || cpu="$c2"
+  done
 }
 
 # check HOOK FILE AGENT -- a deny, printed once, in under 3 s.
