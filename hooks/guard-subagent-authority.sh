@@ -775,6 +775,9 @@ _mk_gs_ss_hit() {
       # Linear: whole-component substitutions only (W = a .* wildcard, Q =
       # one character; the component is lower-cased first, so neither occurs
       # in it), at most 16 fixed characters reach the regex.
+      # Only a word holding a glob character or an expansion reaches the awk:
+      # without one anywhere in the text its input is empty and it finds none.
+      case "$1" in *['*?[$`{']*)
       # shellcheck disable=SC2016  # awk program, not an expansion
       { printf '%s\n' "$1" | LC_ALL=C tr -d "\"'\\\\" | LC_ALL=C tr ';|&<>()=[:space:]' '\n' |
         LC_ALL=C grep -E '[*?[$`{]'; } 2>/dev/null | LC_ALL=C awk '
@@ -789,7 +792,8 @@ _mk_gs_ss_hit() {
         gsub(/\./, "[.]", l); gsub(/W/, ".*", l); gsub(/Q/, ".", l)
         if ("session-start.sh" ~ ("^" l "$")) { f = 1; exit } }
       END { exit !f }'
-      [ $? -eq 1 ] || rc=0
+      [ $? -eq 1 ] || rc=0 ;;
+      esac
     fi
   fi
   [ "$rc" -eq 1 ] && return 1
@@ -988,6 +992,9 @@ _mk_gs_alts() {
   local view="$1" w talt=0 rc=0 re_x='\{[^{}]*(,|\.\.)[^{}]*\}'
   if [ -n "$_MK_GS_ALTS_RC" ] && [ "$view" = "$_MK_GS_ALTS_V" ]; then return "$_MK_GS_ALTS_RC"; fi
   _MK_GS_ALTLIST=""
+  # No { in the text: no brace word, nothing to expand (_mk_gs_feat).
+  _mk_gs_feat "$view"
+  if [ "$_MK_GS_F_BR" = 0 ]; then _MK_GS_ALTS_V="$view"; _MK_GS_ALTS_RC=0; return 0; fi
   while IFS= read -r w; do
     [ -n "$w" ] || continue
     [[ "$w" =~ $re_x ]] || continue
@@ -1061,6 +1068,55 @@ _mk_gs_sed() {
     *) return 1 ;;
   esac
 }
+# _mk_gs_feat VIEW -- facts about VIEW that let a gate skip a stage that
+# cannot find anything in it (one awk, memoised on VIEW). A flag is 1 when
+# VIEW MAY hold what the stage looks for and 0 only when it surely holds none
+# of it, so a skipped stage is one that would have read nothing. The word
+# tests read the text with its quotes and backslashes dropped, as the stages
+# tokenise it, so a name split by them ("r"m) still sets its flag. Flags:
+#   DD  a ..                      DL  a $ or a backtick     BR  a {
+#   GL  a * ? or [                RP  a ( or )              CM  a comma
+#   SG  rm, mv, rsync or find     CD  cd or pushd           ST  settings (any case)
+#   LT  .claude, memokit.json, a .. or a glob with a dot, in any case
+#   CO  a $ ` * ? [ ( ) or ..     QB  a quote or a backslash
+# An awk that fails or prints anything else sets every flag (nothing skipped).
+_MK_GS_FK=""; _MK_GS_FD=0
+_MK_GS_F_DD=1; _MK_GS_F_DL=1; _MK_GS_F_BR=1; _MK_GS_F_GL=1; _MK_GS_F_RP=1; _MK_GS_F_CM=1
+_MK_GS_F_SG=1; _MK_GS_F_CD=1; _MK_GS_F_ST=1; _MK_GS_F_LT=1; _MK_GS_F_CO=1; _MK_GS_F_QB=1
+_mk_gs_feat() {
+  local o
+  if [ "$_MK_GS_FD" = 1 ] && [ "$1" = "$_MK_GS_FK" ]; then return 0; fi
+  # shellcheck disable=SC2016  # awk program, not an expansion
+  o="$(printf '%s\n' "$1" 2>/dev/null | LC_ALL=C awk '
+    { l = $0
+      if (index(l, "$") || index(l, "`")) dl = 1
+      if (index(l, "{")) br = 1
+      if (l ~ /[*?[]/) gl = 1
+      if (index(l, ")") || index(l, "(")) rp = 1
+      if (index(l, ",")) cm = 1
+      if (l ~ /["\047\\]/) qb = 1
+      s = l; gsub(/["\047\\]/, "", s)
+      if (index(s, "..")) dd = 1
+      if (s ~ /rm|mv|rsync|find/) sg = 1
+      if (s ~ /cd|pushd/) cd = 1
+      if (index(tolower(s), "settings")) st = 1
+      k = tolower(l)
+      if (index(k, ".claude") || index(k, "memokit.json")) cl = 1
+      if (index(k, ".") && gl) dg = 1 }
+    END { lt = (dd || cl || dg) ? 1 : 0; co = (dl || gl || rp || dd) ? 1 : 0
+      printf "F%d%d%d%d%d%d%d%d%d%d%d%d\n", dd, dl, br, gl, rp, cm, sg, cd, st, lt, co, qb }' 2>/dev/null)"
+  case "$o" in
+    F[01][01][01][01][01][01][01][01][01][01][01][01])
+      _MK_GS_F_DD="${o:1:1}"; _MK_GS_F_DL="${o:2:1}"; _MK_GS_F_BR="${o:3:1}"; _MK_GS_F_GL="${o:4:1}"
+      _MK_GS_F_RP="${o:5:1}"; _MK_GS_F_CM="${o:6:1}"; _MK_GS_F_SG="${o:7:1}"; _MK_GS_F_CD="${o:8:1}"
+      _MK_GS_F_ST="${o:9:1}"; _MK_GS_F_LT="${o:10:1}"; _MK_GS_F_CO="${o:11:1}"; _MK_GS_F_QB="${o:12:1}" ;;
+    *)
+      _MK_GS_F_DD=1; _MK_GS_F_DL=1; _MK_GS_F_BR=1; _MK_GS_F_GL=1; _MK_GS_F_RP=1; _MK_GS_F_CM=1
+      _MK_GS_F_SG=1; _MK_GS_F_CD=1; _MK_GS_F_ST=1; _MK_GS_F_LT=1; _MK_GS_F_CO=1; _MK_GS_F_QB=1 ;;
+  esac
+  _MK_GS_FK="$1"; _MK_GS_FD=1
+  return 0
+}
 # _mk_gs_linkview VIEW -- sets _MK_GS_LV to VIEW as the link checks read it:
 # $'...' and $"..." become '...' and "..." (judged as their literal text; \t
 # becomes a tab), and a cwd spelling that starts a word and is followed by a
@@ -1070,7 +1126,15 @@ _mk_gs_sed() {
 # path byte (\x \u \U \c \0-\7), or the view has ${PWD:...}/${OLDPWD:...} or
 # assigns PWD/OLDPWD (its value is then unknown). One grep and one sed, only
 # when the view has a $' $" or PWD or pwd or ~+.
+# Memoised on VIEW when it succeeded (the four gates read the same view; the
+# four-pattern case alone is ~4 ms on 60 KB under a UTF-8 locale).
+_MK_GS_LVK=""; _MK_GS_LVO=""; _MK_GS_LVD=0
 _mk_gs_linkview() {
+  if [ "$_MK_GS_LVD" = 1 ] && [ "$1" = "$_MK_GS_LVK" ]; then _MK_GS_LV="$_MK_GS_LVO"; return 0; fi
+  if _mk_gs_linkview_run "$1"; then _MK_GS_LVK="$1"; _MK_GS_LVO="$_MK_GS_LV"; _MK_GS_LVD=1; return 0; fi
+  return 1
+}
+_mk_gs_linkview_run() {
   _MK_GS_LV="$1"
   local tab=$'\t'
   # shellcheck disable=SC2016  # literal $' and sed programs
@@ -1091,20 +1155,27 @@ _MK_GS_BW_V=""; _MK_GS_BW=""; _MK_GS_BW_RC=""
 _mk_gs_bw_get() {
   if [ -z "$_MK_GS_BW_RC" ] || [ "$1" != "$_MK_GS_BW_V" ]; then
     _MK_GS_BW_V="$1"; _MK_GS_BW_RC=0
+    # A blank word is quoted or escaped (a " ' or \ in the text): without
+    # one the grep finds none (_mk_gs_feat).
+    _mk_gs_feat "$1"
     case "$1" in
       *[[:blank:]]*)
-        _MK_GS_BW="$(_mk_gs_blank_words "$1")" || _MK_GS_BW_RC=1
-        # The last line proves grep ran (MKGREPRC0/1; rc 2 or none is a
-        # failure; rc 0 with no word before it is one too) and sed read to
-        # the end (a full list ends in MKBLANKOVER).
-        case "$_MK_GS_NL$_MK_GS_BW" in
-          *"${_MK_GS_NL}MKBLANKOVER") ;;
-          "${_MK_GS_NL}MKGREPRC1") _MK_GS_BW="" ;;
-          "${_MK_GS_NL}MKGREPRC0") _MK_GS_BW_RC=1 ;;
-          *"${_MK_GS_NL}MKGREPRC"[01]) _MK_GS_BW="${_MK_GS_BW%"${_MK_GS_NL}MKGREPRC"[01]}" ;;
-          *) _MK_GS_BW_RC=1 ;;
-        esac
-        case "$_MK_GS_NL$_MK_GS_BW$_MK_GS_NL" in *"${_MK_GS_NL}MKBLANKOVER${_MK_GS_NL}"*) _MK_GS_BW_RC=1 ;; esac ;;
+        if [ "$_MK_GS_F_QB" = 0 ]; then
+          _MK_GS_BW=""
+        else
+          _MK_GS_BW="$(_mk_gs_blank_words "$1")" || _MK_GS_BW_RC=1
+          # The last line proves grep ran (MKGREPRC0/1; rc 2 or none is a
+          # failure; rc 0 with no word before it is one too) and sed read to
+          # the end (a full list ends in MKBLANKOVER).
+          case "$_MK_GS_NL$_MK_GS_BW" in
+            *"${_MK_GS_NL}MKBLANKOVER") ;;
+            "${_MK_GS_NL}MKGREPRC1") _MK_GS_BW="" ;;
+            "${_MK_GS_NL}MKGREPRC0") _MK_GS_BW_RC=1 ;;
+            *"${_MK_GS_NL}MKGREPRC"[01]) _MK_GS_BW="${_MK_GS_BW%"${_MK_GS_NL}MKGREPRC"[01]}" ;;
+            *) _MK_GS_BW_RC=1 ;;
+          esac
+          case "$_MK_GS_NL$_MK_GS_BW$_MK_GS_NL" in *"${_MK_GS_NL}MKBLANKOVER${_MK_GS_NL}"*) _MK_GS_BW_RC=1 ;; esac
+        fi ;;
       *) _MK_GS_BW="" ;;
     esac
   fi
@@ -1123,6 +1194,8 @@ _mk_gs_cd_bases() {
   if [ -n "$_MK_GS_CDB_RC" ] && [ "$view" = "$_MK_GS_CDB_V" ]; then return "$_MK_GS_CDB_RC"; fi
   _mk_gs_bases="$_MK_GS_CWD"
   local hascd=0
+  # (No cd or pushd in the text, quotes dropped: the list is empty; _mk_gs_feat.)
+  _mk_gs_feat "$view"
   while IFS= read -r seg; do
     # shellcheck disable=SC2086  # intentional word splitting
     set -- $seg
@@ -1162,7 +1235,7 @@ EOF2
     _mk_gs_bases="$_mk_gs_bases
 $a"
   done <<EOF
-$(printf '%s' "$view" | LC_ALL=C tr -d "\"'" | LC_ALL=C tr ';|&' '\n' | LC_ALL=C grep -E '(^|[^[:alnum:]_-])(cd|pushd)([^[:alnum:]_-]|$)' | LC_ALL=C sort -u)
+$([ "$_MK_GS_F_CD" = 0 ] || printf '%s' "$view" | LC_ALL=C tr -d "\"'" | LC_ALL=C tr ';|&' '\n' | LC_ALL=C grep -E '(^|[^[:alnum:]_-])(cd|pushd)([^[:alnum:]_-]|$)' | LC_ALL=C sort -u)
 EOF
   # A directory whose name holds a blank (cd "src/sp ace", cd src/sp\ ace)
   # is split by the word splitting above: when the command has a cd or
@@ -1318,7 +1391,13 @@ _mk_gs_set_hit() {
   words="$({ printf '%s' "$vq" | LC_ALL=C tr "\`;|&()<>=[:space:]" '\n'
     printf '\n%s\n' "$_MK_GS_BW"
     printf '%s' "$_MK_GS_ALTLIST"; } | LC_ALL=C sort -u)"
-  lw="$(printf '%s\n' "$words" | LC_ALL=C grep -iF settings | LC_ALL=C tr ',' '\n' | LC_ALL=C grep -iF settings)"
+  # (A word names settings only when the text, quotes and backslashes dropped,
+  # spells it, or a brace expansion can: _mk_gs_feat ST, BR.)
+  _mk_gs_feat "$view"
+  lw=""
+  if [ "$_MK_GS_F_ST$_MK_GS_F_BR" != 00 ]; then
+    lw="$(printf '%s\n' "$words" | LC_ALL=C grep -iF settings | LC_ALL=C tr ',' '\n' | LC_ALL=C grep -iF settings)"
+  fi
   if [ -n "$lw" ]; then
     # ~user/... folded first (empty and . components dropped, .. pops).
     if printf '%s\n' "$lw" 2>/dev/null | LC_ALL=C awk '
@@ -1336,9 +1415,14 @@ _mk_gs_set_hit() {
   # separators, redirections, whitespace and =) holding $, a backtick, ),
   # *, ? or [, and brace alternatives.
   # shellcheck disable=SC2016  # regex, not an expansion
-  cw="$({ printf '%s' "$vq" | LC_ALL=C tr ';|&<>=[:space:]' '\n'
-    printf '\n%s\n' "$_MK_GS_BW"
-    printf '%s' "$_MK_GS_ALTLIST"; } | LC_ALL=C grep -E '[$`)*?[]' | LC_ALL=C sort -u)"
+  # (Only a word holding a $, a backtick, ), * ? or [ is read: none in the text,
+  # none in a brace expansion of it either: _mk_gs_feat DL, GL, RP.)
+  cw=""
+  if [ "$_MK_GS_F_DL$_MK_GS_F_GL$_MK_GS_F_RP" != 000 ]; then
+    cw="$({ printf '%s' "$vq" | LC_ALL=C tr ';|&<>=[:space:]' '\n'
+      printf '\n%s\n' "$_MK_GS_BW"
+      printf '%s' "$_MK_GS_ALTLIST"; } | LC_ALL=C grep -E '[$`)*?[]' | LC_ALL=C sort -u)"
+  fi
   if [ "$hit" = 0 ] && [ -n "$cw" ]; then
     # The trigger (st): the command names claude, a home spelling, or
     # $CLAUDE_CONFIG_DIR by any spelling (any case; // and /./ folded on
@@ -1493,8 +1577,11 @@ EOF
       # nope/../link/settings.json: nope is not on disk while the hook
       # checks, so only the folded spelling reaches the file).
       ew="$({ printf '%s\n' "$words"; printf '%s\n' "$words" | LC_ALL=C tr ',' '\n'; } | LC_ALL=C sort -u | _mk_gs_set_map)"
+      # (.. words are folded only when the mapped list holds a ..: the mapping
+      # above can bring one in from HOME, CLAUDE_PROJECT_DIR and the like, so
+      # the decision is made on the list itself, not on the text.)
       ew="$({ printf '%s\n' "$ew"
-        printf '%s\n' "$ew" | LC_ALL=C grep -E '(^|/)\.\.(/|$)' | LC_ALL=C grep -v '[$`*?[]' | _mk_gs_fold "$_mk_gs_bases"
+        [[ $ew == *..* ]] && printf '%s\n' "$ew" | LC_ALL=C grep -E '(^|/)\.\.(/|$)' | LC_ALL=C grep -v '[$`*?[]' | _mk_gs_fold "$_mk_gs_bases"
       } 2>/dev/null; printf x)"
       _mk_gs_ef_memo set "${ew%x}" "$@"
       rc=$?
@@ -1624,17 +1711,27 @@ _mk_gs_cfg_hit() {
   # Counts of the costly word classes (words split as the brace loop splits
   # them, before de-duplication; one awk, and an awk that fails counts as
   # too large).
-  cnt="$(printf '%s\n' "$view" | LC_ALL=C awk -v m="$MK_GS_MAX_SPECIAL" '
-    { gsub(/["\047\\]/, ""); k = split($0, w, /[;|&<>[:space:]]+/)
-      for (i = 1; i <= k; i++) {
-        if (index(w[i], "..")) u++
-        if (w[i] ~ /[$`]/) d++
-        if (w[i] ~ /\{[^{}]*(,|\.\.)[^{}]*\}/) b++ } }
-    END { print ((u > m || d > m || b > m) ? "big" : "ok") }')"
+  # (Without a .., a $, a backtick or a { in the text no count can pass the
+  # bound: _mk_gs_feat.)
+  _mk_gs_feat "$view"
+  cnt=ok
+  if [ "$_MK_GS_F_DD$_MK_GS_F_DL$_MK_GS_F_BR" != 000 ]; then
+    cnt="$(printf '%s\n' "$view" | LC_ALL=C awk -v m="$MK_GS_MAX_SPECIAL" '
+      { gsub(/["\047\\]/, ""); k = split($0, w, /[;|&<>[:space:]]+/)
+        for (i = 1; i <= k; i++) {
+          if (index(w[i], "..")) u++
+          if (w[i] ~ /[$`]/) d++
+          if (w[i] ~ /\{[^{}]*(,|\.\.)[^{}]*\}/) b++ } }
+      END { print ((u > m || d > m || b > m) ? "big" : "ok") }')"
+  fi
   [ "$cnt" = ok ] || return 2
   # One lower-cased copy (ASCII only: LC_ALL=C, so no locale maps I to a
-  # dotless i), and the lower-cased cwd for folding lower-cased words.
-  lview="$(printf '%s' "$view" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  # dotless i), and the lower-cased cwd for folding lower-cased words. Only
+  # the word lists below read it.
+  lview=""
+  if [ "$_MK_GS_F_LT$_MK_GS_F_CO" != 00 ]; then
+    lview="$(printf '%s' "$view" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  fi
   # _MK_GS_CWD never changes after start-up: lower-cased once per hook run.
   if [ "$_MK_GS_CWDL_DONE" = 0 ]; then
     _MK_GS_CWDL="$(printf '%s' "$_MK_GS_CWD" | LC_ALL=C tr '[:upper:]' '[:lower:]')"; _MK_GS_CWDL_DONE=1
@@ -1675,6 +1772,9 @@ _mk_gs_cfg_hit() {
   case "$pv" in
     *'>'*'|'*) _mk_gs_sed "$pv" -e 's/>[[:space:]]*[|]/> /g' || return 2; pv="$_MK_GS_SO" ;;
   esac
+  # (A segment can be rm, mv, rsync or find only when the text, quotes dropped,
+  # holds one of the four names: _mk_gs_feat. Without one the list is empty.)
+  _mk_gs_feat "$view"
   while IFS= read -r seg; do
     [ -n "$seg" ] || continue
     # Only a segment holding rm, mv, rsync or find as a whole word (blank-split,
@@ -1892,8 +1992,10 @@ _mk_gs_cfg_hit() {
           [ "$sh" = 0 ] || shift
           sh=1
           [ $# -gt 0 ] || break
-          a="$1"; nxt="${2:-}"; n2="${3:-}"; k=$((k + 1))
+          a="$1"
           if [ "$inexp" = 0 ]; then
+            # (the look-ahead words are read only for a start directory)
+            nxt="${2:-}"; n2="${3:-}"; k=$((k + 1))
             case "$a" in
               -H|-L|-P|-D*|-O*) continue ;;
               -*|'('|'!'|'\('*|'\!'*|MKFLP) inexp=1 ;;
@@ -1936,21 +2038,25 @@ _mk_gs_cfg_hit() {
         fi ;;
     esac
   done <<EOF
-$({ printf '%s\n' "$pv"; [ "$pv1" = "$pv" ] || printf '%s\n' "$pv1"; } | LC_ALL=C sed -E "$_MK_GS_MKQ_SED" | LC_ALL=C tr -d "\"'" | LC_ALL=C tr ';|&()' '\n' | LC_ALL=C sort -u)
+$([ "$_MK_GS_F_SG" = 0 ] || { printf '%s\n' "$pv"; [ "$pv1" = "$pv" ] || printf '%s\n' "$pv1"; } | LC_ALL=C sed -E "$_MK_GS_MKQ_SED" | LC_ALL=C tr -d "\"'" | LC_ALL=C tr ';|&()' '\n' | LC_ALL=C sort -u)
 EOF
   if [ -n "$upw" ]; then
     # An overflow (rc 1) is judged again where the config's bases are used
     # (the cd_bases call in the set gate), which fails closed.
     _mk_gs_cd_bases "$view" || :
     [ -n "$_MK_GS_RP" ] || { _MK_GS_RP="$(cd -P "$MK_ROOT" 2>/dev/null && pwd -P)" || _MK_GS_RP="$MK_ROOT"; }
-    while IFS= read -r n; do
-      [ -n "$n" ] || continue
-      [ "$n" = / ] && return 0
-      case "$MK_ROOT/" in "$n/"*) return 0 ;; esac
-      case "$_MK_GS_RP/" in "$n/"*) return 0 ;; esac
-    done <<EOF
-$(printf '%s' "$upw" | _mk_gs_fold "$_mk_gs_bases")
-EOF
+    # One awk over the folded paths (a bash read loop over 4 000 of them cost
+    # ~200 ms): a hit is the root itself or a path the root, or its physical
+    # spelling, lies at or below. It reads to the end (no early exit: the
+    # fold writer is never cut off).
+    # shellcheck disable=SC2016  # awk program, not an expansion
+    if printf '%s' "$upw" | _mk_gs_fold "$_mk_gs_bases" |
+      MK_GS_UR="$MK_ROOT/" MK_GS_UP="$_MK_GS_RP/" LC_ALL=C awk '
+        BEGIN { r = ENVIRON["MK_GS_UR"]; p = ENVIRON["MK_GS_UP"] }
+        $0 != "" && ($0 == "/" || index(r, $0 "/") == 1 || index(p, $0 "/") == 1) { f = 1 }
+        END { exit !f }'; then
+      return 0
+    fi
   fi
   # A config reference is a WORD (split on quotes, separators and =; a glued
   # short option such as -C.claude counts) that is the directory itself
@@ -1992,8 +2098,14 @@ $(printf '%s' "$altlist" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C sort -
 EOF
   fi
   # The lower-cased view split into words once: the climbing words and the
-  # config words below are filters of the same split.
-  ltok="$(printf '%s' "$lview" | LC_ALL=C tr "\"'\`;|&(){}<>=[:space:]" '\n')"
+  # config words below are filters of the same split. Each of their filters
+  # needs .claude, memokit.json, a .. or a glob with a dot in the text
+  # (_mk_gs_feat LT): without one the word lists are empty and not built.
+  ltok=""
+  _mk_gs_feat "$view"
+  if [ "$_MK_GS_F_LT" != 0 ]; then
+    ltok="$(printf '%s' "$lview" | LC_ALL=C tr "\"'\`;|&(){}<>=[:space:]" '\n')"
+  fi
   # The literal words with a .. component (brace alternatives above and the
   # words of the next loop), folded against the lower-cased cwd at once.
   while IFS= read -r w; do
@@ -2002,7 +2114,7 @@ EOF
     case "$w" in *'$'*|*'`'*) ;; *) upw="$upw$w
 " ;; esac
   done <<EOF
-$(printf '%s' "$ltok" | LC_ALL=C grep -F '..' | LC_ALL=C sort -u)
+$([ "$_MK_GS_F_LT" = 0 ] || printf '%s' "$ltok" | LC_ALL=C grep -F '..' | LC_ALL=C sort -u)
 EOF
   if [ -n "$upw" ]; then
     while IFS= read -r n; do
@@ -2028,7 +2140,7 @@ EOF
     # Inside a lane (cwd under <root>/.claude) a climb may reach the config.
     [ "$_MK_GS_INCL" = 1 ] && [ "$up" = 1 ] && { ref=1; break; }
   done <<EOF
-$(printf '%s' "$ltok" | LC_ALL=C grep -E '\.claude|memokit\.json|\.\.|\.[^/]*[*?[]' | LC_ALL=C sort -u)
+$([ "$_MK_GS_F_LT" = 0 ] || printf '%s' "$ltok" | LC_ALL=C grep -E '\.claude|memokit\.json|\.\.|\.[^/]*[*?[]' | LC_ALL=C sort -u)
 EOF
   # A climb split across words: a .claude word and a separate .. word.
   [ "$hascl" = 1 ] && [ "$hasup" = 1 ] && ref=1
@@ -2041,6 +2153,7 @@ EOF
   # holding an expansion. (Read lower-cased: every test below is on special
   # characters or on lower-case names.)
   if [ "$ref" = 0 ]; then
+    _mk_gs_feat "$view"
     while IFS= read -r w; do
       [ -n "$w" ] || continue
       # A ) before .claude closes a command substitution that held a space.
@@ -2053,7 +2166,7 @@ EOF
           [[ "$w" =~ $re_u ]] && { ref=1; break; } ;;
       esac
     done <<EOF
-$(printf '%s' "$lview" | LC_ALL=C tr -d "\"'\\\\" | LC_ALL=C tr ';|&<>[:space:]' '\n' | LC_ALL=C grep -E '[$`*?[)]|\.\.' | LC_ALL=C sort -u)
+$([ "$_MK_GS_F_CO" = 0 ] || printf '%s' "$lview" | LC_ALL=C tr -d "\"'\\\\" | LC_ALL=C tr ';|&<>[:space:]' '\n' | LC_ALL=C grep -E '[$`*?[)]|\.\.' | LC_ALL=C sort -u)
 EOF
   fi
   # A literal word that IS the config or <root>/.claude by device:inode (a
@@ -2143,10 +2256,9 @@ _MK_GS_PLUG_AWK='
     return 0 }
   # dir(p): p without trailing slashes and without its last slash and what
   # follows (p itself when it holds no other slash); "/" for "".
-  function dir(p,   i) {
-    i = length(p); while (i > 0 && substr(p, i, 1) == "/") i--
-    p = substr(p, 1, i); while (i > 0 && substr(p, i, 1) != "/") i--
-    if (i > 0) p = substr(p, 1, i - 1)
+  function dir(p) {
+    sub(/\/+$/, "", p)
+    if (match(p, /\/[^\/]*$/)) p = substr(p, 1, RSTART - 1)
     return (p == "" ? "/" : p) }
   # clear(P): no root is at or above P, nor below it (P is not /).
   function clear(p,   l, i, r) {
@@ -2207,7 +2319,9 @@ _mk_gs_plug_phys() {
       # -L is false there too: a path that does not exist whose nearest
       # existing ancestor is a directory without x cannot be judged (it may
       # be a link into a plugin): a hit.
-      [[ -e $o ]] && continue
+      # (An existing path needs nothing; nor does a parent that is the
+      # directory judged last: it exists and was judged.)
+      [[ -e $o || ${o%/*} == "$lu" ]] && continue
       q="${o%/*}"
       while [ -n "$q" ] && [[ ! -e $q ]]; do q="${q%/*}"; done
       if [ -n "$q" ] && [ "$q" != "$lu" ]; then
@@ -2276,22 +2390,26 @@ _mk_gs_plug_hit() {
   # separators, redirections and = only), as _mk_gs_set_hit reads them.
   # shellcheck disable=SC2016  # regex, not an expansion
   _mk_gs_bw_get "$view" || return 2
+  # (The second list holds only words with a $, a backtick or a parenthesis,
+  # none in the text, none in a brace expansion of it: _mk_gs_feat DL, RP.)
+  _mk_gs_feat "$view"
   ws="$({ printf '%s' "$view" | LC_ALL=C tr -d "\"'\\\\" | LC_ALL=C tr "\`;|&()<>=[:space:]" '\n'
-    printf '%s' "$view" | LC_ALL=C tr -d "\"'\\\\" | LC_ALL=C tr ';|&<>=[:space:]' '\n' | LC_ALL=C grep -E '[$`()]'
+    [ "$_MK_GS_F_DL$_MK_GS_F_RP" = 00 ] || printf '%s' "$view" | LC_ALL=C tr -d "\"'\\\\" | LC_ALL=C tr ';|&<>=[:space:]' '\n' | LC_ALL=C grep -E '[$`()]'
     printf '\n%s\n' "$_MK_GS_BW"
     printf '%s' "$_MK_GS_ALTLIST"; } | LC_ALL=C sort -u)"
   # Memoised on the words and the bases: the flat view of a quoted command
   # (quotes dropped above) has the same ones.
   if [ "$ws$_MK_GS_NL$_mk_gs_bases" != "$_MK_GS_PLUG_K" ]; then
     _MK_GS_PLUG_K="$ws$_MK_GS_NL$_mk_gs_bases"
-    _mk_gs_plug_words "$ws"; _MK_GS_PLUG_RC=$?
+    _mk_gs_plug_words "$ws" "$_MK_GS_F_CM"; _MK_GS_PLUG_RC=$?
   fi
   return "$_MK_GS_PLUG_RC"
 }
-# _mk_gs_plug_words WORDS -- _mk_gs_plug_hit's test of its words (0, 1, 2).
+# _mk_gs_plug_words WORDS CM -- _mk_gs_plug_hit's test of its words (0, 1, 2);
+# CM is 0 when the text holds no comma (nor then do its words).
 _mk_gs_plug_words() {
   local js
-  js="$({ printf '%s\n' "$1"; printf '%s\n' "$1" | LC_ALL=C grep -F ',' | LC_ALL=C tr ',' '\n'; } 2>/dev/null |
+  js="$({ printf '%s\n' "$1"; [ "$2" = 0 ] || printf '%s\n' "$1" | LC_ALL=C grep -F ',' | LC_ALL=C tr ',' '\n'; } 2>/dev/null |
     _mk_gs_set_map 2>/dev/null | MK_GS_BASES="$_mk_gs_bases" MK_GS_ROOTN="$_MK_GS_PLUG_LCN" MK_GS_ROOTX="$_MK_GS_PLUG_LCX" \
     MK_GS_PROJ="$_MK_GS_PLUG_PX" LC_ALL=C awk -v mode=lex -v m="$MK_GS_MAX_PATHS" "$_MK_GS_PLUG_AWK")"
   case $? in 0) ;; 3) return 2 ;; *) return 0 ;; esac

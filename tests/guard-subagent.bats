@@ -2321,3 +2321,21 @@ teardown() {
   tool_write Write "$real/src/memokit-12-careful-x"
   [ "$(decision)" = "allow" ] || { echo "denied non-state path: $(reason)"; false; }
 }
+
+# Fix round 1 (review I1): the settings gate folds the .. words of its MAPPED
+# word list. A HOME holding a .. (here through a symlink that makes the kernel
+# and the lexical fold disagree) brings one in from ~ although the command
+# text has none.
+@test "settings: a HOME with a .. component after a link still names its settings file by a link (~/lnk.json)" {
+  mk_project "$SRCFG"
+  local T
+  T="$(mktemp -d "${MK_FIXTMP}/mkhd.XXXXXX")"; T="$(cd "$T" && pwd)"
+  mkdir -p "$T/deep/x" "$T/home/.claude"
+  ln -s "$T/deep/x" "$T/hl"
+  printf '{}\n' > "$T/home/.claude/settings.json"
+  ln -s "$T/home/.claude/settings.json" "$T/home/lnk.json"
+  export HOME="$T/hl/../home"
+  for c in 'echo x > ~/lnk.json' 'cp a -t~/lnk.json'; do
+    sub_denied_with 'may NOT change Claude Code settings' "$c"
+  done
+}
