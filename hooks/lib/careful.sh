@@ -160,13 +160,61 @@ MK_CF_WT=0
 MK_CF_CWD=""
 _MK_CF_WT_K=(); _MK_CF_WT_V=()
 
-# _mk_cf_has ERE TEXT [i] -- ERE test (case-insensitive with "i"), quiet.
-# Fail closed: a grep error (exit > 1) counts as a match.
+# State and label greps run byte-wise (LC_ALL=C): GNU grep -i in a UTF-8
+# locale is quadratic on one long line (2.7 s at 64 KiB on a CI runner, 3 ms
+# byte-wise). Byte-wise matching alone would lose what a UTF-8 locale folded
+# or counted as a blank, so a text that holds one of the sequences below is
+# also matched in a folded copy (_mk_cf_fold); a hit on EITHER the raw or the
+# folded text counts, so folding never removes a label (glibc's [[:space:]]
+# lacks U+00A0, U+2007 and U+202F: folding them to a blank splits a word, the
+# raw text still sees it whole). Folded: the long s U+017F to s, the Kelvin
+# sign U+212A to k, sharp s U+00DF and U+1E9E to ss, the ligatures U+FB00
+# to U+FB06 to ff fi fl ffi ffl st st (on APFS a name spelled with any of
+# them opens the same file as the ASCII name), and the Unicode spaces U+00A0
+# U+1680 U+2000-200A U+2028 U+2029 U+202F U+205F U+3000 to a blank
+# ([[:space:]] matches them in UTF-8 on macOS, in part on glibc). Not folded,
+# on purpose: Turkish dotless i and dotted I (U+0131, U+0130): they open no
+# other file on APFS, and the dotless i is everyday text (git commit -m
+# "yapildi" with the dotless i); GNU grep -i in a UTF-8 locale did fold them
+# to i, so with GNU grep (Linux, or first in PATH on macOS) a memok(dotless
+# i)t- spelling is no longer a label. grep comes from PATH.
+_mk_cf_b=$'\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\xa8\xa9\xaf'
+_mk_cf_foldsed="s/"$'\xc5\xbf'"/s/g;s/"$'\xe2\x84\xaa'"/k/g;s/("$'\xc3\x9f|\xe1\xba\x9e'")/ss/g;s/"$'\xef\xac\x80'"/ff/g;s/"$'\xef\xac\x81'"/fi/g;s/"$'\xef\xac\x82'"/fl/g;s/"$'\xef\xac\x83'"/ffi/g;s/"$'\xef\xac\x84'"/ffl/g;s/("$'\xef\xac\x85|\xef\xac\x86'")/st/g;s/("$'\xc2\xa0|\xe1\x9a\x80|\xe2\x80'"[$_mk_cf_b]|"$'\xe2\x81\x9f|\xe3\x80\x80'")/ /g"
+_MK_CF_FK=""; _MK_CF_FV=""; _MK_CF_FCHG=0
+# _mk_cf_fold TEXT -- sets _MK_CF_FOLDED to TEXT with those sequences folded
+# and _MK_CF_FCHG to 1 when it holds one (0: _MK_CF_FOLDED is TEXT).
+# A bash pattern test finds them first, so the usual command costs no process;
+# a text that holds one runs one sed per distinct text (the last result is
+# remembered). A sed that fails or prints nothing for a non-empty text
+# returns 1: the caller fails closed (a label).
+_mk_cf_fold() {
+  local LC_ALL=C
+  _MK_CF_FOLDED="$1"; _MK_CF_FCHG=0
+  case "$1" in
+    *$'\xc5\xbf'*|*$'\xe2\x84\xaa'*|*$'\xc2\xa0'*|*$'\xe1\x9a\x80'*|*$'\xe2\x81\x9f'*|*$'\xe3\x80\x80'*|*$'\xc3\x9f'*|*$'\xe1\xba\x9e'*) ;;
+    *$'\xe2\x80'["$_mk_cf_b"]*) ;;
+    *$'\xef\xac'[$'\x80\x81\x82\x83\x84\x85\x86']*) ;;
+    *) return 0 ;;
+  esac
+  _MK_CF_FCHG=1
+  if [ "$1" = "$_MK_CF_FK" ]; then _MK_CF_FOLDED="$_MK_CF_FV"; return 0; fi
+  _MK_CF_FOLDED="$(printf '%s' "$1" 2>/dev/null | LC_ALL=C sed -E "$_mk_cf_foldsed" 2>/dev/null)" || return 1
+  [ -n "$_MK_CF_FOLDED" ] || return 1
+  _MK_CF_FK="$1"; _MK_CF_FV="$_MK_CF_FOLDED"
+}
+
+# _mk_cf_has ERE TEXT [i] -- ERE test (case-insensitive with "i"), quiet, on
+# TEXT and, when it holds a foldable sequence, on its folded copy too (one
+# grep over both, newline-joined: the EREs match inside a line, never across
+# one). Fail closed: a grep or fold error counts as a match.
 _mk_cf_has() {
-  local rc=0
+  local rc=0 txt="$2" nl='
+'
+  _mk_cf_fold "$2" || return 0
+  [ "$_MK_CF_FCHG" = 1 ] && txt="$2$nl$_MK_CF_FOLDED"
   # grep -q may stop reading at its first match; with SIGPIPE ignored (as in
   # CI runners) printf then reports a write error: not a failure, keep quiet.
-  printf '%s' "$2" 2>/dev/null | grep -Eq"${3:-}" -- "$1" 2>/dev/null || rc=$?
+  printf '%s' "$txt" 2>/dev/null | LC_ALL=C grep -Eq"${3:-}" -- "$1" 2>/dev/null || rc=$?
   [ "$rc" -ne 1 ]
 }
 
@@ -197,8 +245,12 @@ _mk_cf_wstate() {
 # is seen too. Two fixed-string greps (LC_ALL=C), no regex over the
 # unbounded text; a grep error counts as a hit (fail closed).
 _mk_cf_bigstate() {
-  local rc=0
-  printf '%s' "$1" 2>/dev/null | LC_ALL=C grep -qiF -e memokit- -e careful- 2>/dev/null || rc=$?
+  local rc=0 txt="$1" nl='
+'
+  # a foldable spelling (Kelvin sign, long s, ligature ...) is looked up too
+  _mk_cf_fold "$1" || { printf 'careful-state\n'; return 0; }
+  [ "$_MK_CF_FCHG" = 1 ] && txt="$1$nl$_MK_CF_FOLDED"
+  printf '%s' "$txt" 2>/dev/null | LC_ALL=C grep -qiF -e memokit- -e careful- 2>/dev/null || rc=$?
   # only exit 1 (searched, no match) clears; 0 goes on, an error falls through
   if [ "$rc" -eq 1 ]; then return 0; fi
   if [ "$rc" -eq 0 ]; then
@@ -975,7 +1027,19 @@ _mk_cf_labels() {
   if ! t="$(printf '%s' "$1" 2>/dev/null | LC_ALL=C tr -d "\\n\"'\\\\")" || _mk_cf_empty "$1" "$t"; then
     printf 'careful-state\nunparsed\n'; t=""
   fi
-  n="$(printf '%s\n%s\ncareful-grants\n' "$1" "$t" 2>/dev/null | grep -ciE "$_mk_cf_sre")"
+  # Byte-wise, as _mk_cf_has: the raw lines, then (only when the text holds a
+  # foldable sequence) its folded lines, then ONE sentinel line. n counts the
+  # matching lines: 1 is the sentinel alone, so extra folded lines cannot
+  # make "no state" look wrong; a failed fold leaves n empty (a hit below).
+  if _mk_cf_fold "$1$nl$t"; then
+    if [ "$_MK_CF_FCHG" = 1 ]; then
+      n="$(printf '%s\n%s\n%s\n%s\n' "$1" "$t" "$_MK_CF_FOLDED" careful-grants 2>/dev/null | LC_ALL=C grep -ciE "$_mk_cf_sre")"
+    else
+      n="$(printf '%s\n%s\n%s\n' "$1" "$t" careful-grants 2>/dev/null | LC_ALL=C grep -ciE "$_mk_cf_sre")"
+    fi
+  else
+    n=""
+  fi
   case "$n" in
     1) ;;
     ''|*[!0-9]*|0) printf 'careful-state\nunparsed\n' ;;

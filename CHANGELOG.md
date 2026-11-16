@@ -2,6 +2,12 @@
 
 Every change to `hooks/`, `skills/`, `agents/` or `WORKING-MODEL.md` bumps `version` in `.claude-plugin/plugin.json` and adds an entry here (a pinned version means `/plugin update` delivers nothing otherwise).
 
+## 0.8.4 — 2026-11-16
+Faster state matching in the main-session guard, and look-alike spellings of memokit's approval files are caught. Nothing needs a config change.
+
+### Guards
+- **State matching is byte-wise.** The case-insensitive state and label greps (`_mk_cf_has`, the `careful-state` count in `_mk_cf_labels`, `_mk_cf_bigstate`) run with `LC_ALL=C`: GNU grep `-i` in a UTF-8 locale is quadratic on one long line (a 64 KiB command took 2.7 s on a GitHub runner against 0.003 s byte-wise). To keep what a UTF-8 locale matched, a text that holds one of the following is also matched in a folded copy (`_mk_cf_fold`), and a hit on either the raw or the folded text counts, so folding never removes a label (glibc's `[[:space:]]` lacks U+00A0, U+2007 and U+202F, so the raw text still sees `memokit-<U+00A0>$X` whole): the long s (U+017F) to `s`, the Kelvin sign (U+212A) to `k`, sharp s (U+00DF, U+1E9E) to `ss`, the ligatures U+FB00 to U+FB06 to `ff fi fl ffi ffl st st` (on APFS a name spelled with any of them opens the same file as the ASCII name, e.g. `careful-con` + U+FB01 + `g`), and the Unicode spaces (U+00A0, U+1680, U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F, U+3000) to a blank. The same folded lookup covers commands past 64 KiB. A bash pattern test finds the sequences first, so a command without them costs no extra process; one that holds them runs one `sed` per distinct text (a failing `sed` counts as a label). **Known limit:** Turkish dotless i and dotted I (U+0131, U+0130) are not folded: they open no other file on APFS and the dotless i is everyday text in Turkish commit messages. GNU grep `-i` in a UTF-8 locale did fold them to `i`, so with GNU grep (Linux, or first in `PATH` on macOS) a `memokıt-` spelling is no longer a label; macOS's own grep never folded any of these. ASCII upper case folds in every locale. Under glibc `tr_TR.UTF-8` the old code missed ASCII upper case with an I (`cat /tmp/memokit-1-CAREFUL-PENDING`, `CAREFUL-INTEGRITY`, `MARIADB -e "drop table x"` got no label); they are labelled now. `grep` is resolved from `PATH`.
+
 ## 0.8.3 — 2026-11-15
 A cheaper subagent guard. Decisions are the same as in 0.8.2 for every command; nothing needs a config change.
 

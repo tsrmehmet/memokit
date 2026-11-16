@@ -702,3 +702,32 @@ EOF")"
     [ "$cpu" -lt 2000 ] || { echo "$f: ${cpu} ms cpu (${ms} ms wall)"; false; }
   done
 }
+
+# 0.8.4: the state greps run byte-wise after _mk_cf_fold, which maps the long s,
+# the Kelvin sign, the sharp s, the ligatures and the Unicode spaces to ASCII
+# (one sed per distinct text that holds one; the raw and the folded text are
+# both searched). A command dense with those sequences decides within 2 s of
+# CPU, at 64 KiB and past the cap (big_fold: the literal state test folds too).
+@test "fold: the guard decides a 64 KiB command dense with long s, Kelvin signs, ligatures and Unicode spaces within 2 s of CPU" {
+  mk_project "$BCFG"
+  local d="$BATS_TEST_TMPDIR" f n ls k u3 fi sz
+  ls="$(printf '\xc5\xbf')"; k="$(printf '\xe2\x84\xaa')"; u3="$(printf '\xe3\x80\x80')"
+  fi="$(printf '\xef\xac\x81')"; sz="$(printf '\xc3\x9f')"
+  { printf 'cp'; rep ' $x/memokit-a' 2500; rep "$fi$sz" 6000; printf ' ./dst'; } > "$d/fold_lig"
+  { printf 'cp'; rep ' $x/memokit-a' 2500; rep "$ls" 15000; printf ' ./dst'; } > "$d/fold_ls"
+  { printf 'cp'; rep ' $x/memokit-a' 2500; rep "x$u3" 8000; printf ' ./dst'; } > "$d/fold_u3"
+  { printf 'echo x | tee'; rep " -a memo${k}it-a" 4200; printf ' out'; } > "$d/fold_k"
+  { printf 'psql -c "'; rep "drop${u3}tab${ls}e " 4400; printf 'x"'; } > "$d/fold_sql"
+  for f in fold_lig fold_ls fold_u3 fold_k fold_sql; do
+    n="$(wc -c < "$d/$f")"; [ "$n" -gt 60000 ] && [ "$n" -le 65536 ] || { echo "$f: $n bytes"; false; }
+    hook_file guard-destructive.sh "$d/$f"
+    echo "$f: ${ms} ms wall, ${cpu} ms cpu" >&3
+    [ "$cpu" -lt 2000 ] || { echo "$f: ${cpu} ms cpu (${ms} ms wall)"; false; }
+  done
+  { printf 'cp'; rep " $ls$fi$u3" 8000; printf ' ./dst'; } > "$d/big_fold"
+  n="$(wc -c < "$d/big_fold")"; [ "$n" -gt 65536 ] && [ "$n" -le 80000 ] || { echo "big_fold: $n bytes"; false; }
+  hook_file guard-destructive.sh "$d/big_fold"
+  echo "big_fold: ${ms} ms wall, ${cpu} ms cpu" >&3
+  [ "$status" -eq 0 ] || { echo "big_fold: status $status"; false; }
+  [ "$cpu" -lt 2000 ] || { echo "big_fold: ${cpu} ms cpu (${ms} ms wall)"; false; }
+}

@@ -1224,3 +1224,102 @@ EOF
   labels "$big${nl}cp f \"memo\"kit-1"
   [ "$output" = too-large ] || { echo "[$output]"; false; }
 }
+
+# 0.8.4: the state and label greps run byte-wise (LC_ALL=C), because GNU grep
+# -i in a UTF-8 locale is quadratic on one long line. _mk_cf_fold maps what a
+# UTF-8 locale folded or counted as a blank back to ASCII first: the long s
+# U+017F, the Kelvin sign U+212A, the sharp s and the ff/fi/fl/ffi/ffl/st
+# ligatures (on APFS they open the ASCII-named file) and the Unicode spaces.
+# A hit on the raw or on the folded text counts. Deliberately NOT folded: Turkish dotless i / dotted I
+# (U+0131 / U+0130). They open no other file on APFS and the dotless i is
+# everyday text ("yapıldı"), so a memok<dotless i>t- spelling is no label.
+byte_wise_checks() {
+  local k s nb u3 em i0 c f7 n2 fi
+  f7="$(printf '\xe2\x80\x87')"; n2="$(printf '\xe2\x80\xaf')"; fi="$(printf '\xef\xac\x81')"
+  k="$(printf '\xe2\x84\xaa')"; s="$(printf '\xc5\xbf')"; nb="$(printf '\xc2\xa0')"
+  u3="$(printf '\xe3\x80\x80')"; em="$(printf '\xe2\x80\x83')"; i0="$(printf '\xc4\xb1')"
+  mk_project "$(cfg '"careful":{"patterns":[]}')"
+  # ASCII upper case (words with an I, for tr_TR) and look-alike spellings
+  while IFS='|' read -r want c; do
+    [ -n "$want" ] || continue
+    labels "$c"
+    printf '%s\n' "$output" | grep -qx "$want" || { echo "$LC_ALL: missed $want: $c -> [$output]"; false; }
+  done <<EOF
+careful-state|cat /tmp/CAREFUL-PENDING
+careful-state|cat /tmp/careful-INTEGRITY
+careful-state|echo x > /tmp/MEMOKIT-1-\$X
+careful-state|echo CAREFUL-CONVERT \$x
+careful-state|cat /tmp/memokit-1-careful-grant${s}
+careful-state|printf x >> /tmp/memokit-1-careful-grant${s}
+careful-state|echo x > /tmp/memo${k}it-1-\$X
+sql-destructive|my${s}ql -e 'drop table x'
+sql-destructive|p${s}ql -c 'truncate t'
+sql-destructive|my${s}qladmin -u root drop shop
+sql-destructive|mysql -e 'delete${u3}from orders'
+sql-destructive|mysqladmin${nb}drop shop
+sql-destructive|mysqladmin -u root${em}drop shop
+sql-destructive|sqlcmd -Q "drop${nb}table t"
+sql-destructive|sqlcmd -Q "delete${u3}from t"
+careful-state|dd if=x${u3}of=/tmp/memokit-\$h-x
+careful-state|tee${u3}-a out.log \$T/careful-\$s
+careful-state|cp a /tmp/memokit-${nb}d/../\$X
+careful-state|cp a /tmp/memokit-${f7}d/../\$X
+careful-state|cp a /tmp/memokit-${n2}d/../\$X
+careful-state|echo x >/tmp/memokit-${nb}\$X
+careful-state|tee /tmp/careful-${nb}\$X
+careful-state|printf x > /tmp/memokit-1-careful-con${fi}g
+EOF
+  # not folded on purpose: dotless i is ordinary text ("yapıldı"), no label.
+  # (A memok<dotless i>t- spelling opens no other file on APFS; GNU grep -i
+  # used to fold it to i, byte-wise matching does not. A known limit.)
+  labels "git commit -m \"yap${i0}ld${i0}\""
+  [ -z "$output" ] || { echo "$LC_ALL: yapıldı -> [$output]"; false; }
+  # sharp s is ordinary German text: no label
+  labels "git commit -m \"Stra$(printf '\xc3\x9f')e\""
+  [ -z "$output" ] || { echo "$LC_ALL: Straße -> [$output]"; false; }
+}
+@test "0.8.4: state matching is byte-wise and folds look-alikes (LC_ALL=C)" {
+  export LC_ALL=C; byte_wise_checks
+}
+@test "0.8.4: state matching is byte-wise and folds look-alikes (C.UTF-8)" {
+  locale -a 2>/dev/null | grep -qi '^c\.utf-\{0,1\}8$' || skip "C.UTF-8 not installed"
+  export LC_ALL=C.UTF-8; byte_wise_checks
+}
+@test "0.8.4: state matching is byte-wise and folds look-alikes (en_US.UTF-8)" {
+  locale -a 2>/dev/null | grep -qi '^en_US\.utf-\{0,1\}8$' || skip "en_US.UTF-8 not installed"
+  export LC_ALL=en_US.UTF-8; byte_wise_checks
+}
+@test "0.8.4: state matching is byte-wise and folds look-alikes (tr_TR.UTF-8)" {
+  locale -a 2>/dev/null | grep -qi '^tr_TR\.utf-\{0,1\}8$' || skip "tr_TR.UTF-8 not installed"
+  export LC_ALL=tr_TR.UTF-8; byte_wise_checks
+}
+
+# 0.8.4: the fold table, called directly (sharp s and the ligatures reach no
+# state name by label, so the table itself is pinned), and the over-64 KiB
+# literal state test sees a folded spelling too.
+@test "0.8.4: _mk_cf_fold maps long s, Kelvin, sharp s, ligatures and Unicode spaces; ı stays" {
+  run "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; . '$HOOKS/lib/careful.sh'
+    in=\$(printf 'a\\xc5\\xbf b\\xe2\\x84\\xaa c\\xc3\\x9f d\\xe1\\xba\\x9e e\\xef\\xac\\x80 f\\xef\\xac\\x81 g\\xef\\xac\\x82 h\\xef\\xac\\x83 i\\xef\\xac\\x84 j\\xef\\xac\\x85 k\\xef\\xac\\x86 l\\xc2\\xa0m\\xe3\\x80\\x80n\\xc4\\xb1')
+    _mk_cf_fold \"\$in\"; printf '%s|%s' \"\$_MK_CF_FCHG\" \"\$_MK_CF_FOLDED\"" _
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf '1|as bk css dss eff ffi gfl hffi iffl jst kst l m n\xc4\xb1')" ] || { echo "[$output]"; false; }
+  run "$MK_BASH" -c ". '$HOOKS/lib/common.sh'; . '$HOOKS/lib/careful.sh'; _mk_cf_fold 'plain ascii'; printf '%s|%s' \"\$_MK_CF_FCHG\" \"\$_MK_CF_FOLDED\""
+  [ "$output" = "0|plain ascii" ]
+}
+
+@test "0.8.4: past the cap the literal state test sees a Kelvin or ligature spelling" {
+  mk_project "$(cfg '"careful":{"patterns":[]}')"
+  local big nl='
+' k fi
+  k="$(printf '\xe2\x84\xaa')"; fi="$(printf '\xef\xac\x81')"
+  big="$(awk 'BEGIN { for (i = 0; i < 6000; i++) printf "ls src/a.cs\n" }')"
+  labels "$big${nl}echo x > /tmp/memo${k}it-1-\$X"
+  printf '%s\n' "$output" | grep -qx 'careful-state' || { echo "Kelvin: [$output]"; false; }
+  printf '%s\n' "$output" | grep -qx 'too-large' || { echo "Kelvin: [$output]"; false; }
+  # the literal careful- alone already gives this one (the old code too);
+  # only the Kelvin line above needs the fold
+  labels "$big${nl}echo x > /tmp/careful-con${fi}g-\$X"
+  printf '%s\n' "$output" | grep -qx 'careful-state' || { echo "fi: [$output]"; false; }
+  labels "$big${nl}echo x > /tmp/other-\$X"
+  [ "$output" = too-large ] || { echo "plain: [$output]"; false; }
+}
