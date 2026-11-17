@@ -731,3 +731,23 @@ EOF")"
   [ "$status" -eq 0 ] || { echo "big_fold: status $status"; false; }
   [ "$cpu" -lt 2000 ] || { echo "big_fold: ${cpu} ms cpu (${ms} ms wall)"; false; }
 }
+
+# 0.8.5: the coarse delete/move gate judges every word of a subagent command
+# that names a delete tool, in ONE awk. A 64 KiB list of plain words (one
+# line, and the same list split by backslash-newline) is decided (allowed)
+# within 2 s of CPU.
+@test "dg_words: the delete gate decides a 64 KiB subagent list of plain words within 2 s of CPU" {
+  mk_project "$BCFG"
+  local d="$BATS_TEST_TMPDIR" f n i
+  { printf 'rm -rf'; i=0; while [ "$i" -lt 12 ]; do i=$((i + 1)); printf ' src/a%d' "$i"; done
+    rep ' src/a1234' 6300; } > "$d/dg_words"
+  { printf 'rm -rf src/a0 \\\n'; rep 'src/a1234 \
+' 5200; printf 'src/z\n'; } > "$d/dg_words_nl"
+  for f in dg_words dg_words_nl; do
+    n="$(wc -c < "$d/$f")"; [ "$n" -gt 60000 ] && [ "$n" -le 65536 ] || { echo "$f: $n bytes"; false; }
+    hook_file guard-subagent-authority.sh "$d/$f" agent-1
+    echo "$f: ${ms} ms wall, ${cpu} ms cpu" >&3
+    [ "$(decision)" = allow ] || { echo "$f: expected allow, got [$(reason | cut -c1-200)]"; false; }
+    [ "$cpu" -lt 2000 ] || { echo "$f: ${cpu} ms cpu (${ms} ms wall)"; false; }
+  done
+}

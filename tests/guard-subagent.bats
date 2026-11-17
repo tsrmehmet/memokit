@@ -117,6 +117,89 @@ sub_denied_with() { # KEY CMD
   reason | grep -q "$1" || { echo "wrong reason: $(reason)"; false; }
 }
 
+# 0.8.5 (the coarse delete/move gate): a command in an "allow" loop below that
+# the gate denies on every machine is listed in FLIP085 and asserted as that
+# deny. A command that names /tmp/... is judged by whether the fixture's root
+# lies in that temp tree (Linux: /tmp/..., the tree is then not harmless and
+# the command is denied; macOS: /var/folders/..., /tmp is harmless).
+FLIP085=(
+  rm\ -rf\ ~/tmp/x
+  rm\ -rf\ \$HOME/tmp/x
+  mv\ -t\ /tmp/x\ .
+  mv\ \"\$\{PWD\}/build\"\ /tmp/x
+  \\mv\ \"\$\{PWD\}/build\"\ /tmp/x
+  $'mv\t"${PWD}/build"\t/tmp/x'
+  \>f\ find\ mv\ \$PWD\ /tmp/x
+  while\ read\ f\;\ do\ mv\ \"\$f\"\ src/\;\ done
+  for\ f\ in\ \*.log\;\ do\ mv\ \"\$f\"\ logs/\;\ done
+  if\ find\ .\ -name\ \'\*.pyc\'\ -delete\;\ then\ :\;\ fi
+  ls\ \|\ xargs\ mv\ -t\ logs
+  echo\ a\ \|\ xargs\ rm\ -f
+  if\ mv\ a\ \$PWD\;\ then\ :\;\ fi
+  rm\ -rf\ \"\$\{PWD\}/build\"
+  rm\ -rf\ \$PWD/build
+  find\ .\ -name\ \'\*.pyc\'\ -delete
+  find\ .\ -name\ node_modules\ -prune\ -exec\ rm\ -rf\ \{\}\ +
+  find\ .\ -type\ f\ -name\ x\ -delete
+  mv\ a\ .
+  rm\ -rf\ \"\$\(pwd\)/build\"
+  rm\ -rf\ \`pwd\`/build
+  find\ .\ \\\(\ -name\ a\ -o\ -name\ b\ \\\)\ -delete
+  find\ .\ -name\ \'\*.pyc\'\ -delete\ -o\ -name\ __pycache__\ -delete
+  mv\ a\ \$PWD
+  mv\ a.txt\ \$PWD/
+  mv\ a\ \"\$\{PWD\}/\"
+  mv\ a\ \"\$\(pwd\)\"
+  rm\ -rf\ \$PWD/../sibling
+  find\ .\ -name\ x\ -exec\ find\ \{\}\ -delete\ \\\;
+  mv\ -t\ .\ a\ b
+  mv\ a\ b\ \$PWD
+  mv\ -f\ a\ .
+  mv\ -Tf\ a\ \$PWD
+  mv\ --\ a\ \$PWD
+  mv\ -f\ a\ ~+
+  mv\ -t\ \"\$\{PWD\}/sub\"\ a
+  find\ .\ -name\ \'\*.bak\'\ -exec\ mv\ \{\}\ old/\ \\\;
+  mv\ \"\$PWD/a\"\ \"\$PWD/b\"
+  eval\ \"rm\ -rf\ \$\{PWD\}/build\"
+  cp\ a\ \"\$\{PWD\}/x\"\;\ mv\ \"\$\{OLDPWD\}/c\"\ d
+  mv\ build/\*\ \$PWD
+  mv\ src/\*.log\ \$PWD
+  mv\ \*.log\ \$PWD/logs
+  mv\ \"\$f\"\ .
+  mv\ a\ \$PWD\ \>/dev/null
+  mv\ a\ \$PWD\ 2\>/dev/null
+  mv\ a\ \$PWD\ \</dev/null
+  mv\ a\ \$PWD\ #\ move
+  mv\ a\ \$PWD\ \>\ /dev/null
+  mv\ a\ \$PWD\ 2\>\ err.log
+  mv\ a\ \$PWD\ \>/dev/null\ 2\>\&1
+  mv\ a\ \$PWD\ \&\>/dev/null
+  mv\ --target-directory=\"\$\{PWD\}/sub\"\ a
+  mv\ --target-directory=\$\{PWD\}/sub\ a
+  mv\ -t\"\$\{PWD\}/sub\"\ a
+  \\mv\ a\ \"\$\{PWD\}/\"
+  mv\ a\ \"\$\(pwd\)/\"
+  mv\ a\ \$PWD\ 2\>\&1
+  mv\ a\ \$PWD\ \&\ echo\ done
+  sleep\ 1\ \&\ mv\ a\ \$PWD
+  rm\ -rf\ \"\$\{HOME\}/work\"
+  mv\ a\ ~
+  $'mv a \\\n$PWD'
+  2\>/dev/null\ mv\ a\ \$PWD
+)
+sub_allowed_085() { # CMD
+  local f want=allow
+  run_hook guard-subagent-authority.sh "$(bash_payload "$1" agent-1)"
+  for f in "${FLIP085[@]}"; do [ "$f" = "$1" ] && want=gate; done
+  case "$1" in *'/tmp/'*) case "$PROJ" in /tmp/*|/private/tmp/*) want=gate ;; esac ;; esac
+  if [ "$want" = gate ]; then
+    if [ "$(decision)" = deny ] && reason | grep -q 'deletes or moves'; then return 0; fi
+    echo "0.8.5: expected the delete gate to deny: $1 ($(reason))"; return 1
+  fi
+  if [ "$(decision)" = "allow" ]; then return 0; fi
+  echo "denied: $1 ($(reason))"; return 1
+}
 @test "subagent: ssh to a configured host is denied even read-only" {
   mk_project "$SRCFG"
   sub_denied_with 'remote target' "ssh prod.example.com 'ls'"
@@ -301,8 +384,7 @@ EOF")"
     'for f in *.log; do mv "$f" logs/; done' 'if mv a.txt b.txt; then :; fi' "if find . -name '*.pyc' -delete; then :; fi" \
     'if cd src && rm -rf build; then :; fi' 'ls | xargs mv -t logs' 'echo a | xargs rm -f' 'if true; then cp a "$PWD/b"; fi' \
     'if mv a $PWD; then :; fi' 'then_x=1; mv a b'; do
-    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
-    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+    sub_allowed_085 "$c"
   done
 }
 @test "subagent: everyday removals stay allowed" {
@@ -314,8 +396,7 @@ EOF")"
     'rm -rf "$(pwd)/build"' 'cd src && mv a b' 'rm -rf `pwd`/build' \
     'find . \( -name a -o -name b \) -delete' "find . -name '*.pyc' -delete -o -name __pycache__ -delete" \
     'mv a $PWD' 'mv a.txt $PWD/' 'mv a "${PWD}/"' 'mv a "$(pwd)"' 'find . -exec echo {} +' 'rm -rf $PWD/../sibling'; do
-    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
-    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+    sub_allowed_085 "$c"
   done
 }
 @test "subagent: find terminators and groups, flat parts of an ancestor, mv -t" {
@@ -333,8 +414,7 @@ EOF")"
   for c in 'find build -exec true {} \; -delete' 'find . -name x -exec find {} -delete \;' 'mv -t /tmp/x a' \
     'mv -t . a b' \
     'rm -rf "${PWD}/build"' 'rm -rf $PWD/build' 'find . \( -name a -o -name b \) -delete'; do
-    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
-    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+    sub_allowed_085 "$c"
   done
 }
 @test "subagent: mv with a pwd, root or ancestor word fails closed unless it is the plain last word" {
@@ -362,8 +442,7 @@ EOF")"
   for c in 'mv a $PWD' 'mv a.txt $PWD/' 'mv a b $PWD' 'mv -f a .' 'mv -t . a b' 'mv src/a src/b' 'mv -t /tmp/x .' \
     'mv "${PWD}/build" /tmp/x' 'mv a "${PWD}/"' 'mv -Tf a $PWD' 'mv -- a $PWD' 'mv -f a ~+' 'mv -t "${PWD}/sub" a' \
     "find . -name '*.bak' -exec mv {} old/ \;" 'find src -exec mv {} /tmp/x \;' 'mv "$PWD/a" "$PWD/b"'; do
-    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
-    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+    sub_allowed_085 "$c"
   done
 }
 @test "subagent: flat pairs are counted per occurrence; mv globs, expansions, trailing redirects and options" {
@@ -391,8 +470,7 @@ EOF")"
     'mv a $PWD 2> err.log' 'mv a $PWD >/dev/null 2>&1' 'mv a $PWD &>/dev/null' \
     'mv --target-directory="${PWD}/sub" a' 'mv --target-directory=${PWD}/sub a' 'mv -t"${PWD}/sub" a' \
     'mv a "${PWD}/"' '\mv a "${PWD}/"' 'mv a "$(pwd)/"'; do
-    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
-    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+    sub_allowed_085 "$c"
   done
 }
 @test "subagent: redirect and tab spellings, line continuation and home pairs in the config gate" {
@@ -412,8 +490,7 @@ EOF")"
   done
   for c in 'mv a $PWD >/dev/null 2>&1' 'mv a $PWD 2>&1' 'mv a $PWD & echo done' 'sleep 1 & mv a $PWD' \
     "mv${T}\"\${PWD}/build\"${T}/tmp/x" 'mv "${PWD}/build" /tmp/x' 'rm -rf "${HOME}/work"'; do
-    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
-    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+    sub_allowed_085 "$c"
   done
 }
 @test "subagent: HOME spellings of an ancestor are denied, other home paths stay allowed" {
@@ -424,8 +501,7 @@ EOF")"
     sub_denied_with 'configuration' "$c"
   done
   for c in 'rm -rf ~/tmp/x' 'rm -rf $HOME/tmp/x' 'rm -rf "${HOME}/work"' 'mv a ~' 'cp a ~/b'; do
-    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
-    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+    sub_allowed_085 "$c"
   done
 }
 @test "subagent: the config name allowlist lets plain reads through" {
@@ -773,6 +849,12 @@ lane_write() { # CWD PATH
   mkdir -p "$W"
   for c in 'cp /tmp/build/*.js dist/' 'rm -f /tmp/mk-*.tmp' 'cp x /private/tmp/claude-501/s/scratchpad/$N'; do
     lane_cmd "$W" "$c"
+    # 0.8.5 task 5: a glob at the top of /tmp is denied by the delete gate
+    # wherever the project lies (accepted false deny).
+    case "$c" in 'rm -f /tmp/'*)
+      [ "$(decision)" = deny ] && reason | grep -q 'deletes or moves' || { echo "0.8.5: expected the delete gate: $c: $(reason)"; false; }
+      continue ;;
+    esac
     [ "$(decision)" = "allow" ] || { echo "denied: $c: $(reason)"; false; }
   done
   run_hook guard-subagent-authority.sh "$(bash_payload 'cp x /private/tmp/claude-501/s/scratchpad/$N' agent-1)"
@@ -1165,11 +1247,18 @@ settings_denied() { # TOOL PATH
     sub_denied_with 'may NOT change Claude Code settings' "$c"
   done
   # mkdir, cp, mv and cd do not count; ln with an existing directory passes
-  for c in 'mkdir -p out && cp x out/$F.json' "mv a $x/new && cp x $x/new/\$F.json" 'cp *.json dist/' \
+  # (0.8.5: a mv names a word with $x, an absolute path in the fixture's temp
+  # tree; the delete gate judges it, so it is asserted below, not here)
+  for c in 'mkdir -p out && cp x out/$F.json' 'cp *.json dist/' \
     "ln -s a b && cp x $x/\$F.json" 'cp x login/$F.json' 'cp -r a b; ls -s; cp x out/$F.json' 'ls -ln; cp x out/$F.json'; do
     run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
     [ "$(decision)" = "allow" ] || { echo "denied: $c: $(reason)"; false; }
   done
+  # 0.8.5: the mv names an absolute path in the fixture's temp tree, which the
+  # tests' project root also lies in: outside the project, so the delete gate
+  # (not the settings gate) denies it
+  run_hook guard-subagent-authority.sh "$(bash_payload "mv a $x/new && cp x $x/new/\$F.json" agent-1)"
+  [ "$(decision)" = deny ] && reason | grep -q 'deletes or moves'
 }
 @test "settings final 1: a .. after a directory the command makes is checked folded too" {
   mk_settings
@@ -1986,8 +2075,7 @@ teardown() {
     sub_denied_with "another plugin's installed files" "$c"
   done
   for c in "make \\${N}  test" "echo a \\${N}b" "mv a b \\${N}c" "mv a \\${N}\$PWD" "cd src && mv a \\${N}b"; do
-    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
-    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+    sub_allowed_085 "$c"
   done
 }
 @test "subagent: a leading redirection does not hide the command word" {
@@ -2000,8 +2088,7 @@ teardown() {
     sub_denied_with 'configuration' "$c"
   done
   for c in '> f mv a b' '2>/dev/null mv a $PWD' '> f rm -rf build'; do
-    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
-    [ "$(decision)" = "allow" ] || { echo "denied: $c ($(reason))"; false; }
+    sub_allowed_085 "$c"
   done
 }
 @test "plugins: a tab in a blank-named directory does not defeat the link check" {
@@ -2186,8 +2273,7 @@ teardown() {
   for c in 'cmd | mv a b' 'echo x | tee f' "echo '>' | cat" 'mv a b >| log' \
     'cd src && rm -rf build' 'rm -rf build dist' 'eval "$(direnv export bash)"' 'env FOO=1 npm test' 'cp a "$PWD/b"' \
     "find . -name '*.pyc' -delete" 'find . -name node_modules -prune -exec rm -rf {} +' 'echo x > "src/my dir/a.txt"'; do
-    run_hook guard-subagent-authority.sh "$(bash_payload "$c" agent-1)"
-    [ "$(decision)" = "allow" ] || bad="$bad|denied: $c ($(reason))"
+    sub_allowed_085 "$c" || bad="$bad|denied: $c"
   done
   [ -z "$bad" ] || { echo "$bad"; false; }
 }
@@ -2255,8 +2341,7 @@ teardown() {
   mk_project "$SRCFG"
   local c bad=""
   for c in '> log rm -rf build' '2>&1 make' '>> log mv a b' '> f find . -name x -print' '>f find mv $PWD /tmp/x'; do
-    sub_cmd "$c"
-    [ "$(decision)" = "deny" ] && bad="$bad|denied: $c"
+    sub_allowed_085 "$c" || bad="$bad|denied: $c"
   done
   [ -z "$bad" ] || { echo "$bad"; false; }
 }

@@ -877,7 +877,7 @@ EOF
   case "$1" in
     *find*)
       # The escaped or quoted ; ( ) of a find expression become tokens
-      # (MKFSEMI, MKFLP, MKFRP) before the split, as in the subagent gate.
+      # (MKFSEMI, MKFLP, MKFRP) before the split.
       # shellcheck disable=SC2016  # sed programs, not expansions
       if m="$(printf '%s' "$1" 2>/dev/null | LC_ALL=C sed -E -e 's/\\;/ MKFSEMI /g' -e 's/\\[(]/ MKFLP /g' -e 's/\\[)]/ MKFRP /g' \
           -e 's/[$]?'\''[;]'\''/ MKFSEMI /g' -e 's/[$]?'\''[(]'\''/ MKFLP /g' -e 's/[$]?'\''[)]'\''/ MKFRP /g' \

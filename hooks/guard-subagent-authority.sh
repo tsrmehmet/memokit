@@ -1076,13 +1076,13 @@ _mk_gs_sed() {
 # tokenise it, so a name split by them ("r"m) still sets its flag. Flags:
 #   DD  a ..                      DL  a $ or a backtick     BR  a {
 #   GL  a * ? or [                RP  a ( or )              CM  a comma
-#   SG  rm, mv, rsync or find     CD  cd or pushd           ST  settings (any case)
+#   CD  cd or pushd               ST  settings (any case)
 #   LT  .claude, memokit.json, a .. or a glob with a dot, in any case
 #   CO  a $ ` * ? [ ( ) or ..     QB  a quote or a backslash
 # An awk that fails or prints anything else sets every flag (nothing skipped).
 _MK_GS_FK=""; _MK_GS_FD=0
 _MK_GS_F_DD=1; _MK_GS_F_DL=1; _MK_GS_F_BR=1; _MK_GS_F_GL=1; _MK_GS_F_RP=1; _MK_GS_F_CM=1
-_MK_GS_F_SG=1; _MK_GS_F_CD=1; _MK_GS_F_ST=1; _MK_GS_F_LT=1; _MK_GS_F_CO=1; _MK_GS_F_QB=1
+_MK_GS_F_CD=1; _MK_GS_F_ST=1; _MK_GS_F_LT=1; _MK_GS_F_CO=1; _MK_GS_F_QB=1
 _mk_gs_feat() {
   local o
   if [ "$_MK_GS_FD" = 1 ] && [ "$1" = "$_MK_GS_FK" ]; then return 0; fi
@@ -1097,22 +1097,21 @@ _mk_gs_feat() {
       if (l ~ /["\047\\]/) qb = 1
       s = l; gsub(/["\047\\]/, "", s)
       if (index(s, "..")) dd = 1
-      if (s ~ /rm|mv|rsync|find/) sg = 1
       if (s ~ /cd|pushd/) cd = 1
       if (index(tolower(s), "settings")) st = 1
       k = tolower(l)
       if (index(k, ".claude") || index(k, "memokit.json")) cl = 1
       if (index(k, ".") && gl) dg = 1 }
     END { lt = (dd || cl || dg) ? 1 : 0; co = (dl || gl || rp || dd) ? 1 : 0
-      printf "F%d%d%d%d%d%d%d%d%d%d%d%d\n", dd, dl, br, gl, rp, cm, sg, cd, st, lt, co, qb }' 2>/dev/null)"
+      printf "F%d%d%d%d%d%d%d%d%d%d%d\n", dd, dl, br, gl, rp, cm, cd, st, lt, co, qb }' 2>/dev/null)"
   case "$o" in
-    F[01][01][01][01][01][01][01][01][01][01][01][01])
+    F[01][01][01][01][01][01][01][01][01][01][01])
       _MK_GS_F_DD="${o:1:1}"; _MK_GS_F_DL="${o:2:1}"; _MK_GS_F_BR="${o:3:1}"; _MK_GS_F_GL="${o:4:1}"
-      _MK_GS_F_RP="${o:5:1}"; _MK_GS_F_CM="${o:6:1}"; _MK_GS_F_SG="${o:7:1}"; _MK_GS_F_CD="${o:8:1}"
-      _MK_GS_F_ST="${o:9:1}"; _MK_GS_F_LT="${o:10:1}"; _MK_GS_F_CO="${o:11:1}"; _MK_GS_F_QB="${o:12:1}" ;;
+      _MK_GS_F_RP="${o:5:1}"; _MK_GS_F_CM="${o:6:1}"; _MK_GS_F_CD="${o:7:1}"
+      _MK_GS_F_ST="${o:8:1}"; _MK_GS_F_LT="${o:9:1}"; _MK_GS_F_CO="${o:10:1}"; _MK_GS_F_QB="${o:11:1}" ;;
     *)
       _MK_GS_F_DD=1; _MK_GS_F_DL=1; _MK_GS_F_BR=1; _MK_GS_F_GL=1; _MK_GS_F_RP=1; _MK_GS_F_CM=1
-      _MK_GS_F_SG=1; _MK_GS_F_CD=1; _MK_GS_F_ST=1; _MK_GS_F_LT=1; _MK_GS_F_CO=1; _MK_GS_F_QB=1 ;;
+      _MK_GS_F_CD=1; _MK_GS_F_ST=1; _MK_GS_F_LT=1; _MK_GS_F_CO=1; _MK_GS_F_QB=1 ;;
   esac
   _MK_GS_FK="$1"; _MK_GS_FD=1
   return 0
@@ -1599,114 +1598,15 @@ EOF
   fi
   return 1
 }
-# _mk_gs_pwdw WORD NEXT -- 0 when WORD spells the cwd or the previous cwd
-# ($PWD, ${PWD}, $OLDPWD, ${OLDPWD}, ~+, ~-, with an optional trailing /). In
-# the flat view (_MK_GS_FLATV=1) ${PWD}/build has become the two words
-# `$PWD` and `/build`: a following word that starts with / and is more than
-# / is a subdirectory, not the root (_mk_gs_pfx folds it), but only when the
-# raw command glues as many cwd spellings to a / as the flat view has such
-# pairs (_mk_gs_adj); else `\mv $PWD /tmp/x` would read as one path.
-_MK_GS_FLATV=0; _MK_GS_RP=""; _mk_gs_pf=""; _mk_gs_oh=0; _mk_gs_oa=""
-# The raw command and the flat view of the current rule-3 pass and memoised
-# facts about them (set by _mk_gs_rule3; empty = not computed yet).
-_MK_GS_RAWV=""; _MK_GS_FLATT=""; _MK_GS_ADJ=""; _MK_GS_ANSI=""; _MK_GS_RQH=""
-# _mk_gs_adj -- 0 when every flat `$PWD /x` (or `pwd /x`) pair comes from a
-# raw spelling the flat view splits (${PWD}/x, $(pwd)/x, `pwd`/x): F <= G
-# from mk_careful_glue_counts (lib/careful.sh), counted per occurrence over
-# the whole raw command and flat view. One awk, memoised; fails closed.
-_mk_gs_adj() {
-  local o g f
-  if [ -z "$_MK_GS_ADJ" ]; then
-    _MK_GS_ADJ=0
-    if command -v mk_careful_glue_counts >/dev/null 2>&1 &&
-       o="$(mk_careful_glue_counts "$_MK_GS_RAWV" "$_MK_GS_FLATT")"; then
-      g="${o% *}"; f="${o#* }"
-      case "$g$f" in ''|*[!0-9]*) ;; *) [ "$f" -le "$g" ] && _MK_GS_ADJ=1 ;; esac
-    fi
-  fi
-  [ "$_MK_GS_ADJ" = 1 ]
-}
-# _mk_gs_rqh -- 0 when the raw command has a quoted or escaped # < > or &
-# ('#x', "<x", \>x): with quotes dropped such a word looks like a comment or a
-# redirection but is an operand. Memoised.
-_mk_gs_rqh() {
-  if [ -z "$_MK_GS_RQH" ]; then
-    _MK_GS_RQH=0
-    if printf '%s' "${_MK_GS_RAWV}" 2>/dev/null | LC_ALL=C grep -Eq '["'\''\\][#<>&]'; then _MK_GS_RQH=1; fi
-  fi
-  [ "$_MK_GS_RQH" = 1 ]
-}
-_mk_gs_pwdw() {
-  # shellcheck disable=SC2016  # literal spellings, not expansions
-  case "$1" in
-    '$PWD'|'$PWD/'|'${PWD}'|'${PWD}/'|'$OLDPWD'|'$OLDPWD/'|'${OLDPWD}'|'${OLDPWD}/'|'~+'|'~+/'|'~-'|'~-/') ;;
-    *) return 1 ;;
-  esac
-  if [ "$_MK_GS_FLATV" = 1 ]; then
-    # Only $PWD and $OLDPWD come from a split ${PWD}/x (~+/x stays one word).
-    # shellcheck disable=SC2016  # literal spellings, not expansions
-    case "$1:${2:-}" in *:/) ;; '$PWD':/*|'$OLDPWD':/*) _mk_gs_adj && return 1 ;; esac
-  fi
-  return 0
-}
-# _mk_gs_pfx WORD NEXT -- 0 and a path in _mk_gs_pf when WORD is a cwd-family
-# or home spelling with something below it: ./rest for $PWD/rest (folded
-# against the cd bases, so $PWD/../proj climbs), $HOME[/rest] absolute for ~,
-# ~/x, $HOME, ${HOME}. In the flat view the rest is the next word.
-_mk_gs_pfx() {
-  local w="$1" n="${2:-}" r=""
-  _mk_gs_pf=""
-  # shellcheck disable=SC2016,SC2088  # literal spellings, not expansions
-  case "$w" in
-    '$PWD/'?*|'${PWD}/'?*|'$OLDPWD/'?*|'${OLDPWD}/'?*|'~+/'?*|'~-/'?*) _mk_gs_pf="./${w#*/}"; return 0 ;;
-    '$PWD'|'${PWD}'|'$OLDPWD'|'${OLDPWD}'|'~+'|'~-')
-      if [ "$_MK_GS_FLATV" = 1 ]; then case "$n" in /?*) _mk_gs_pf=".$n"; return 0 ;; esac; fi
-      return 1 ;;
-    '~'|'$HOME'|'${HOME}') ;;
-    '~/'*|'$HOME/'*|'${HOME}/'*) r="/${w#*/}" ;;
-    *) return 1 ;;
-  esac
-  [ -n "${HOME:-}" ] || return 1
-  # Only a split ${HOME}/x (flat: $HOME /x, counted per occurrence) takes the
-  # next word as its rest; ~ and a plain $HOME word never do.
-  if [ -z "$r" ] && [ "$_MK_GS_FLATV" = 1 ] && [ "$w" != '~' ]; then
-    case "$n" in /?*) _mk_gs_adj && r="$n" ;; esac
-  fi
-  _mk_gs_pf="${HOME%/}$r"
-  return 0
-}
-# _mk_gs_opnd CMD WORD NEXT LAST NEXT2 -- one operand of rm/mv/rsync or one
-# find start dir (CMD find). Sets _mk_gs_oh=1 when WORD is the cwd itself
-# ($PWD family, or a bare `pwd` left by a flat backtick; LAST=1 marks a mv
-# destination the caller exempts, which is not), else _mk_gs_oa to the
-# literal path to fold (one line, or empty).
-_mk_gs_opnd() {
-  local c="$1" a="$2" n="${3:-}" last="$4" n2="${5:-}" nn
-  _mk_gs_oh=0; _mk_gs_oa=""
-  if [ "$c" = mv ] && [ "$last" = 1 ]; then return 0; fi
-  if _mk_gs_pwdw "$a" "$n"; then _mk_gs_oh=1; return 0; fi
-  if _mk_gs_pfx "$a" "$n"; then _mk_gs_oa="$_mk_gs_pf$_MK_GS_NL"; return 0; fi
-  if [ "$_MK_GS_FLATV" = 1 ] && [ "$a" = pwd ]; then
-    nn="$n"; case "$nn" in -P|-L) nn="$n2" ;; esac
-    case "$nn" in /?*) _mk_gs_adj || { _mk_gs_oh=1; return 0; } ;; *) _mk_gs_oh=1; return 0 ;; esac
-  fi
-  case "$a" in "$c"|-*|*'$'*|*'`'*|*'*'*|*'?'*|*'['*|*'{'*|\~*) return 0 ;; esac
-  if [ "$c" = mv ]; then case "$a" in .|./|..|../) return 0 ;; esac; fi
-  _mk_gs_oa="$a$_MK_GS_NL"
-  return 0
-}
 # _mk_gs_cfg_hit VIEW -- 0: VIEW references the project config (or
 # <root>/.claude) outside the read-only allowlist; 1: it does not; 2: it is
-# too large to check (the bounds above).
-# One leading redirection word: [N|{var}] > >> < <> or >| then an optional
-# glued target (>| is made > by the sed below).
-_MK_GS_RDRE='^([0-9]+|\{[A-Za-z_][A-Za-z0-9_]*\})?(<<-|<<<?|>>?|<>?)(.*)$'
-_MK_GS_FDRE='^(\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)$'
+# too large to check (the bounds above). Config references only: removing or
+# moving the root or an ancestor is judged by the delete gate (_mk_gs_del_hit).
 _MK_GS_CWDL=""; _MK_GS_CWDL_DONE=0
 _mk_gs_cfg_hit() {
-  local view="$1" lview ltok seg w a n ref=0 cand=0 hascl=0 hasup=0 up
+  local view="$1" lview ltok w a n ref=0 cand=0 hascl=0 hasup=0 up
   local re_a re_b re_c re_d re_f re_o re_g re_u upw="" altlist="" cnt
-  local cwdl pv pv1 k nxt n2 sh xa argv rest bulk bi fd ff inexp prev sd ex e lastf mvx dep ng L pr
+  local cwdl
   [ "${#view}" -le "$MK_GS_MAX_CHARS" ] || return 2
   # Counts of the costly word classes (words split as the brace loop splits
   # them, before de-duplication; one awk, and an awk that fails counts as
@@ -1737,327 +1637,6 @@ _mk_gs_cfg_hit() {
     _MK_GS_CWDL="$(printf '%s' "$_MK_GS_CWD" | LC_ALL=C tr '[:upper:]' '[:lower:]')"; _MK_GS_CWDL_DONE=1
   fi
   cwdl="$_MK_GS_CWDL"
-  # Removal of the config's directory or an ancestor (rm/mv/rsync with the
-  # project root, $CLAUDE_PROJECT_DIR, or rm/rsync with . or .. or a path
-  # that climbs to the root or above) switches every hook off. Quotes are
-  # dropped from the whole text first (as they were per word); segments are
-  # de-duplicated; the .. arguments of rm/rsync are folded together after
-  # the loop.
-  # $(pwd) and `pwd` are the $PWD spelling (the flat view has the parentheses
-  # as blanks: `$ pwd`).
-  pv="$view"
-  # shellcheck disable=SC2016  # sed programs, not expansions
-  case "$view" in
-    *pwd*) _mk_gs_sed "$view" -e 's/[$][(][^)]*pwd[^)]*[)]/$PWD/g' -e 's/`[^`]*pwd[^`]*`/$PWD/g' -e 's/[$] +pwd( +-[PL])?( |$)/$PWD\2/g' || return 2; pv="$_MK_GS_SO" ;;
-  esac
-  # find: the escaped or quoted ; ( ) of its expression (\; ';' ";" $';' \( '(')
-  # become tokens, so they neither split the segment nor vanish with the
-  # quotes (MKFSEMI ends an -exec, MKFLP/MKFRP are parentheses).
-  # shellcheck disable=SC2016  # sed programs, not expansions
-  case "$view" in
-    *find*) _mk_gs_sed "$pv" -e 's/\\;/ MKFSEMI /g' -e 's/\\[(]/ MKFLP /g' -e 's/\\[)]/ MKFRP /g' \
-      -e 's/[$]?'\''[;]'\''/ MKFSEMI /g' -e 's/[$]?'\''[(]'\''/ MKFLP /g' -e 's/[$]?'\''[)]'\''/ MKFRP /g' \
-      -e 's/"[;]"/ MKFSEMI /g' -e 's/"[(]"/ MKFLP /g' -e 's/"[)]"/ MKFRP /g' || return 2; pv="$_MK_GS_SO" ;;
-  esac
-  # A & redirection keeps its target in the segment (>&2 2>&1 >&- <&0 &>x
-  # are not command separators); a real background & is untouched.
-  # shellcheck disable=SC2016  # sed programs, not expansions
-  case "$pv" in
-    *'&'*) _mk_gs_sed "$pv" -e 's/>&/> /g' -e 's/<&/< /g' -e 's/&>/ >/g' || return 2; pv="$_MK_GS_SO" ;;
-  esac
-  # >| (clobber) is a redirection, not a pipe; but the > may be a quoted or
-  # escaped literal before a real pipe (echo \> | mv ...). Both readings are
-  # judged (pv1 keeps the |): either may deny (mv a $PWD >|log is denied).
-  pv1="$pv"
-  case "$pv" in
-    *'>'*'|'*) _mk_gs_sed "$pv" -e 's/>[[:space:]]*[|]/> /g' || return 2; pv="$_MK_GS_SO" ;;
-  esac
-  # (A segment can be rm, mv, rsync or find only when the text, quotes dropped,
-  # holds one of the four names: _mk_gs_feat. Without one the list is empty.)
-  _mk_gs_feat "$view"
-  while IFS= read -r seg; do
-    [ -n "$seg" ] || continue
-    # Only a segment holding rm, mv, rsync or find as a whole word (blank-split,
-    # as set -- splits it) can be one: one case instead of the split.
-    case " $seg " in
-      *[" 	"]rm[" 	"]*|*[" 	"]mv[" 	"]*|*[" 	"]rsync[" 	"]*|*[" 	"]find[" 	"]*) ;;
-      *) continue ;;
-    esac
-    # shellcheck disable=SC2086  # intentional word splitting
-    set -- $seg
-    xa=0
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        # leading redirections (>f, 2>f, <f, 2>&1 as > 1, > f, <<< x): the
-        # operator and every word after it up to the next rm/mv/rsync/find
-        # word are skipped
-        *)
-          # {var} in front of a redirection word: the flat view turns the
-          # braces into blanks, leaving a bare name (fail closed: skipped
-          # there unless it is one of the commands judged here)
-          if [ $# -gt 1 ] && [[ $1 =~ $_MK_GS_FDRE ]] && [[ $2 =~ $_MK_GS_RDRE ]]; then
-            case "$1" in rm|mv|rsync|find) ;; *) shift; continue ;; esac
-          fi
-          if [[ $1 =~ $_MK_GS_RDRE ]]; then
-            # a bare operator takes the next word as its target (> find mv
-            # writes a file named find); the target may hold a blank ("a b"
-            # is two words here): then skip up to the next word judged here
-            # (fail closed, as for a wrapper)
-            w="${BASH_REMATCH[3]}"; shift
-            [ -n "$w" ] || { [ $# -gt 0 ] && shift; }
-            while [ $# -gt 0 ]; do
-              case "$1" in rm|mv|rsync|find) break ;; esac
-              # a second bare operator in the skip region takes its target too
-              if [[ $1 =~ $_MK_GS_RDRE ]] && [ -z "${BASH_REMATCH[3]}" ] && [ $# -gt 1 ]; then shift; fi
-              shift
-            done
-            continue
-          fi
-          case "$1" in
-        # exec wrappers: skip them and their option words and arguments up to
-        # the next word judged here (fail closed when unsure)
-        timeout|nice|ionice|stdbuf|caffeinate|setsid|doas|chrt|unbuffer)
-          shift
-          while [ $# -gt 0 ]; do
-            case "$1" in rm|mv|rsync|find) break ;; esac
-            if [[ $1 =~ $_MK_GS_RDRE ]] && [ -z "${BASH_REMATCH[3]}" ] && [ $# -gt 1 ]; then shift; fi
-            shift
-          done ;;
-        # xargs appends its input as the LAST operand of the command it runs:
-        # the mv last-operand exemption below does not hold after it.
-        xargs) xa=1; shift ;;
-        # shell keywords in front of a command (if/while/until/elif test it,
-        # coproc runs it)
-        *=*|'{'|'('|'!'|if|elif|while|until|then|do|else|coproc|sudo|command|nohup|time|eval|exec|builtin|env|MKQ|-*) shift ;; *) break ;; esac ;;
-      esac
-    done
-    case "${1:-}" in
-      rm|mv|rsync)
-        w="$1"; k=0; mvx=0; L=$#; pr=0
-        # The walks below look one and two words ahead: they shift through
-        # the words (linear) and restore them from this copy, never slice
-        # "${*:k:1}" per word (a copy of the whole list each: quadratic).
-        argv=("$@")
-        # A segment whose operands are all plain words (letters, digits and
-        # _ . / , : @ % + = -; none starting with . or -, none the command
-        # word, pwd or the project root) holds nothing the walks below judge:
-        # every operand but mv's last one is an operand as it stands. A long
-        # list of such words is then decided without a pass per word.
-        # (rm and rsync skip option words whatever they hold, so up to ten
-        # leading ones are not looked at.)
-        bulk=0; bi=2
-        if [ "$w" != mv ]; then
-          while [ "$bi" -le "$#" ] && [ "$bi" -le 12 ]; do
-            case "${!bi}" in -*) bi=$((bi + 1)) ;; *) break ;; esac
-          done
-        fi
-        rest=" ${*:bi} "
-        case "$rest" in
-          *[![:alnum:]_./,:@%+=\ -]*|*' .'*|*' -'*|*' pwd '*|*" $w "*|*"$MK_ROOT"*) ;;
-          *) bulk=1 ;;
-        esac
-        # mv fails closed: a cwd, root or ancestor word is a source wherever
-        # it stands. The one exception is the plain destination: the last
-        # operand L (a trailing comment and trailing redirections are not
-        # operands), when no word up to L (quotes dropped) starts with - and
-        # holds a t or an S (-t, -ft, --target..., --t, -S, --suffix, --su,
-        # -$t ...: these may make an earlier word the target or eat the next
-        # word), no word before L can expand to an option at run time (holds
-        # $ or a backquote, starts with * ? [ {, or starts with - and holds
-        # one of * ? [ {), and the raw command has no $'...' or $"..." (they
-        # hide an option). So mv -t $PWD a, --target-directory=$PWD a,
-        # mv -b -S .bak a $PWD, mv "$f" $PWD and mv *.log $PWD are denied
-        # (accepted false positives). mv refuses . and .. as operands.
-        if [ "$w" = mv ]; then
-          mvx=$((1 - xa))
-          # L: a word starting with # ends the operands, unless the raw
-          # command quotes or escapes a # < > & (then nothing is dropped);
-          # then trailing redirections (>x, 2>x, <x, &>x, or an operator word
-          # and its target) are dropped from the end. A word after a
-          # redirection inside the operands stays an operand.
-          if ! _mk_gs_rqh; then
-            k=0
-            for a in "$@"; do
-              k=$((k + 1))
-              case "$a" in '#'*) L=$((k - 1)); break ;; esac
-            done
-            while [ "$L" -gt 2 ]; do
-              a="${!L}"; k=$((L - 1)); n="${!k}"
-              # A bare operator word (its target was split off) is no operand
-              # to drop: whatever stands before it stays the last operand.
-              case "$a" in *'>'|*'<') break ;; esac
-              case "$n" in
-                '>'|'>>'|'<'|'>|'|'<>'|'&>'|'&>>'|[0-9]'>'|[0-9]'>>'|[0-9]'<'|[0-9]'>|') L=$((L - 2)); continue ;;
-              esac
-              case "$a" in '<'*|'>'*|[0-9]'>'*|[0-9]'<'*|'&>'*) L=$((L - 1)); continue ;; esac
-              break
-            done
-            k=0
-          fi
-          # Flat view: ${PWD}/ split into the words $PWD / is one operand.
-          if [ "$_MK_GS_FLATV" = 1 ] && [ "$L" -gt 2 ]; then
-            a="${!L}"; k=$((L - 1)); n="${!k}"; k=0
-            # shellcheck disable=SC2016  # literal spellings, not expansions
-            case "$a:$n" in /*:'$PWD'|/*:'$OLDPWD'|/*:pwd) _mk_gs_adj && pr=1 ;; esac
-          fi
-          # An option word that ends in a cwd spelling after = or t
-          # (--target-directory=$PWD, -t~+) names the cwd too (flat: not when
-          # it is the glued ${PWD}/sub split into $PWD /sub).
-          sh=0
-          [ "$bulk" = 0 ] || sh=2
-          # shellcheck disable=SC2016  # literal spellings, not expansions
-          while [ "$sh" != 2 ]; do
-            [ "$sh" = 0 ] || shift
-            sh=1
-            [ $# -gt 0 ] || break
-            a="$1"; nxt="${2:-}"; k=$((k + 1))
-            case "$a" in
-              -*[=t]'$PWD'|-*[=t]'$PWD/'|-*[=t]'${PWD}'|-*[=t]'${PWD}/'|-*[=t]'$OLDPWD'|-*[=t]'$OLDPWD/'|\
-              -*[=t]'${OLDPWD}'|-*[=t]'${OLDPWD}/'|-*[=t]'~+'|-*[=t]'~+/'|-*[=t]'~-'|-*[=t]'~-/')
-                if [ "$_MK_GS_FLATV" = 1 ]; then
-                  case "$nxt" in /?*) _mk_gs_adj && continue ;; esac
-                fi
-                return 0 ;;
-            esac
-            [ "$k" -le "$L" ] || continue
-            case "$a" in -*t*|-*S*) mvx=0 ;; esac
-            [ "$k" -lt "$L" ] || continue
-            [ "$pr" = 1 ] && [ "$k" = $((L - 1)) ] && continue
-            case "$a" in *'$'*|*'`'*|'*'*|'?'*|'['*|'{'*|-*'*'*|-*'?'*|-*'['*|-*'{'*) mvx=0 ;; esac
-          done
-          set -- "${argv[@]}"
-          k=0
-          if [ "$mvx" = 1 ]; then
-            if [ -z "$_MK_GS_ANSI" ]; then
-              _MK_GS_ANSI=0
-              # shellcheck disable=SC2016  # literal $' and $", not expansions
-              case "${_MK_GS_RAWV:-$view}" in *"\$'"*|*'$"'*) _MK_GS_ANSI=1 ;; esac
-            fi
-            [ "$_MK_GS_ANSI" = 0 ] || mvx=0
-          fi
-        fi
-        sh=0
-        if [ "$bulk" = 1 ]; then
-          sh=2
-          # all plain: the operands are words bi..$# (bi..$#-1 for mv's last)
-          k=$#; [ "$mvx" = 1 ] && k=$((k - 1))
-          if [ "$k" -ge "$bi" ]; then
-            upw="$upw$(printf '%s\n' "${@:bi:$((k - bi + 1))}")$_MK_GS_NL"
-          fi
-          k=0
-        fi
-        while [ "$sh" != 2 ]; do
-          [ "$sh" = 0 ] || shift
-          sh=1
-          [ $# -gt 0 ] || break
-          a="$1"; nxt="${2:-}"; n2="${3:-}"; k=$((k + 1))
-          case "$a" in
-            "$MK_ROOT"|"$MK_ROOT/") return 0 ;;
-            "\$CLAUDE_PROJECT_DIR"|"\$CLAUDE_PROJECT_DIR/"|"\${CLAUDE_PROJECT_DIR}"|"\${CLAUDE_PROJECT_DIR}/") return 0 ;;
-            .|./|..|../) [ "$w" = mv ] || return 0 ;;
-          esac
-          # The effective position of the operand (flat: ${PWD}/ is the two
-          # words $PWD / when the raw command glues them).
-          e=$k
-          if [ "$_MK_GS_FLATV" = 1 ]; then
-            # shellcheck disable=SC2016  # literal spellings, not expansions
-            case "$a:$nxt" in '$PWD':/*|'$OLDPWD':/*|pwd:/*) _mk_gs_adj && e=$((k + 1)) ;; esac
-          fi
-          lastf=0; [ "$e" = "$L" ] && [ "$mvx" = 1 ] && lastf=1
-          # A plain word (letters, digits and _ . / , : @ % + = -, not starting
-          # with . or -, not the command word or pwd) is what _mk_gs_opnd
-          # returns it as: skipped when it is mv's last operand, else an
-          # operand. Same answer without the calls (a long list is 4000+ words).
-          case "$a" in
-            *[![:alnum:]_./,:@%+=-]*|[![:alnum:]_/]*|"$w"|pwd|'') _mk_gs_opnd "$w" "$a" "$nxt" "$lastf" "$n2" ;;
-            *) _mk_gs_oh=0; if [ "$lastf" = 1 ]; then _mk_gs_oa=""; else _mk_gs_oa="$a$_MK_GS_NL"; fi ;;
-          esac
-          [ "$_mk_gs_oh" = 1 ] && return 0
-          upw="$upw$_mk_gs_oa"
-        done ;;
-      find|*/find)
-        # An UNFILTERED find at the root or above with -delete or -exec rm
-        # hits (a filter that still matches everything is a documented
-        # residual). The expression is walked in order: a filter counts only
-        # before the delete action in the same branch (reset at -o, -or and
-        # ,), not after ! or -not, nor inside a negated ( ... ) group;
-        # parentheses are otherwise transparent. Inside an -exec range a
-        # -delete, a nested find or a mv (it moves the start dir away) counts
-        # like rm. Keep the
-        # filter list in step with _mk_cf_find in lib/careful.sh. Start dirs
-        # are the words before the first -*, ( or ! word; none means .
-        shift; fd=0; ff=0; inexp=0; ex=0; prev=""; sd=""; k=0; dep=0; ng=0
-        sh=0
-        while :; do
-          [ "$sh" = 0 ] || shift
-          sh=1
-          [ $# -gt 0 ] || break
-          a="$1"
-          if [ "$inexp" = 0 ]; then
-            # (the look-ahead words are read only for a start directory)
-            nxt="${2:-}"; n2="${3:-}"; k=$((k + 1))
-            case "$a" in
-              -H|-L|-P|-D*|-O*) continue ;;
-              -*|'('|'!'|'\('*|'\!'*|MKFLP) inexp=1 ;;
-              *)
-                case "$a" in
-                  "$MK_ROOT"|"$MK_ROOT/") sd="$sd$a$_MK_GS_NL"; continue ;;
-                  "\$CLAUDE_PROJECT_DIR"|"\$CLAUDE_PROJECT_DIR/"|"\${CLAUDE_PROJECT_DIR}"|"\${CLAUDE_PROJECT_DIR}/") sd="$sd$MK_ROOT$_MK_GS_NL"; continue ;;
-                esac
-                _mk_gs_opnd find "$a" "$nxt" 0 "$n2"
-                if [ "$_mk_gs_oh" = 1 ]; then sd="$sd.$_MK_GS_NL"; else sd="$sd$_mk_gs_oa"; fi
-                continue ;;
-            esac
-          fi
-          if [ "$ex" = 1 ]; then
-            # shellcheck disable=SC1003  # a lone backslash word
-            case "$a" in
-              ';'|'\;'|'\'|'+'|MKFSEMI) ex=0 ;;
-              -delete|rm|*/rm|unlink|*/unlink|rmdir|*/rmdir|shred|*/shred|find|*/find|mv|*/mv) [ "$ff" = 0 ] && fd=1 ;;
-            esac
-            prev="$a"; continue
-          fi
-          case "$a" in
-            -exec|-execdir|-ok|-okdir) ex=1 ;;
-            -o|-or|,) ff=0 ;;
-            '('|'\('|MKFLP)
-              dep=$((dep + 1))
-              case "$prev" in '!'|-not|'\!') [ "$ng" = 0 ] && ng=$dep ;; esac ;;
-            ')'|'\)'|MKFRP)
-              [ "$ng" = "$dep" ] && ng=0
-              [ "$dep" -gt 0 ] && dep=$((dep - 1)) ;;
-            -delete) [ "$ff" = 0 ] && fd=1 ;;
-            -name|-iname|-path|-ipath|-wholename|-iwholename|-regex|-iregex|-newer*|-type|-mtime|-mmin|-atime|-amin|-ctime|-cmin|-size|-user|-group|-perm|-prune|-empty|-links)
-              case "$prev" in '!'|-not|'\!') ;; *) [ "$ng" = 0 ] && ff=1 ;; esac ;;
-          esac
-          prev="$a"
-        done
-        if [ "$fd" = 1 ]; then
-          [ -n "$sd" ] || sd=".$_MK_GS_NL"
-          upw="$upw$sd"
-        fi ;;
-    esac
-  done <<EOF
-$([ "$_MK_GS_F_SG" = 0 ] || { printf '%s\n' "$pv"; [ "$pv1" = "$pv" ] || printf '%s\n' "$pv1"; } | LC_ALL=C sed -E "$_MK_GS_MKQ_SED" | LC_ALL=C tr -d "\"'" | LC_ALL=C tr ';|&()' '\n' | LC_ALL=C sort -u)
-EOF
-  if [ -n "$upw" ]; then
-    # An overflow (rc 1) is judged again where the config's bases are used
-    # (the cd_bases call in the set gate), which fails closed.
-    _mk_gs_cd_bases "$view" || :
-    [ -n "$_MK_GS_RP" ] || { _MK_GS_RP="$(cd -P "$MK_ROOT" 2>/dev/null && pwd -P)" || _MK_GS_RP="$MK_ROOT"; }
-    # One awk over the folded paths (a bash read loop over 4 000 of them cost
-    # ~200 ms): a hit is the root itself or a path the root, or its physical
-    # spelling, lies at or below. It reads to the end (no early exit: the
-    # fold writer is never cut off).
-    # shellcheck disable=SC2016  # awk program, not an expansion
-    if printf '%s' "$upw" | _mk_gs_fold "$_mk_gs_bases" |
-      MK_GS_UR="$MK_ROOT/" MK_GS_UP="$_MK_GS_RP/" LC_ALL=C awk '
-        BEGIN { r = ENVIRON["MK_GS_UR"]; p = ENVIRON["MK_GS_UP"] }
-        $0 != "" && ($0 == "/" || index(r, $0 "/") == 1 || index(p, $0 "/") == 1) { f = 1 }
-        END { exit !f }'; then
-      return 0
-    fi
-  fi
   # A config reference is a WORD (split on quotes, separators and =; a glued
   # short option such as -C.claude counts) that is the directory itself
   # (.claude, or a path ending in /.claude), the config (memokit.json, any
@@ -2419,6 +1998,371 @@ _mk_gs_plug_words() {
     awk -v mode=phys "$_MK_GS_PLUG_AWK"
   case $? in 0) return 1 ;; 3) return 2 ;; *) return 0 ;; esac
 }
+# --- DEL-GATE BEGIN ---------------------------------------------------------
+# The coarse delete/move gate (0.8.5; spec "The rule"). _mk_gs_del_hit VIEW:
+# a view that holds a delete/move trigger word (rm mv rsync rmdir unlink
+# shred; find only with the word -delete) passes only when EVERY word of it is
+# provably harmless. No word has a role: the rule never asks which word is the
+# command, a source or a destination. Returns 1 (no trigger, or all words
+# harmless), 0 (a word is not harmless: _MK_GS_DEL_WHY is EXPANSION OUTSIDE
+# BARE CWD or PIPE, _MK_GS_DEL_WORD the word) or 2 (could not judge: deny).
+# One awk per judged view, run only when the bash prefilter sees a trigger
+# substring, so a command without one spends no process. Every match is
+# byte-wise (LC_ALL=C). The scratchpad is looked up lazily, only when the
+# first pass finds a word that its trees could excuse.
+# shellcheck disable=SC2016  # an awk program
+_MK_GS_DEL_AWK='
+function judge(w,   t, a, n, c, i, p, k, k2, first, gd, lc, pre, cc, d, n2) {
+  # A comment marker (a # at a shell word start, marked on the raw line) is
+  # not a glob; any other # is.
+  if (substr(w, 1, 1) == "\002") w = "_" substr(w, 2)
+  if (w ~ /[$`]/) return "EXPANSION"
+  if (substr(w, 1, 1) == "~") return "EXPANSION"
+  t = w; gsub(/[{][}]/, "", t)
+  if (t ~ /[{}]/) return "EXPANSION"
+  if (("/" w "/") ~ /\/\.\.\//) return "OUTSIDE"
+  # An option with its value glued on (-C.. -C/ -D..) names a directory.
+  if (substr(w, 1, 1) == "-" && (index(w, "/") > 0 || index(w, "..") > 0)) return "OUTSIDE"
+  a = (substr(w, 1, 1) == "/")
+  # host:path (rsync, scp) and a drive-like prefix: a relative word with a
+  # colon is not a path of this tree. The lone : (the shell no-op) is not.
+  if (!a && w != ":" && index(w, ":") > 0) return "OUTSIDE"
+  n = split(w, c, "/"); p = ""; k = 0; gd = 0
+  for (i = 1; i <= n; i++) {
+    if (c[i] == "" || c[i] == ".") continue
+    k++; if (k == 1) first = c[i]
+    cc[k] = c[i]
+    p = p "/" c[i]
+    # A glob in a dot component can match .. or .claude.
+    if (substr(c[i], 1, 1) == "." && gpos(c[i]) > 0) gd = 1
+  }
+  if (gd) return "BARE"
+  if (a) {
+    if (k == 0) return "OUTSIDE"
+    if (p == "/dev/null" || p == "/dev/stdout" || p == "/dev/stderr") return ""
+    # Below the root: the first component after it, as a relative word.
+    for (i = 1; i <= nR; i++) if (index(p, R[i] "/") == 1) {
+      n2 = split(substr(p, length(R[i]) + 2), d, "/")
+      if (n2 == 3 && d[1] == ".claude" && d[2] == "worktrees" && gpos(w) == 0) return "OUTSIDE"
+      return below(d, n2, w)
+    }
+    for (i = 1; i <= nS; i++) if (index(p, S[i] "/") == 1) return ""
+    # Below a temp tree only. First a Claude tree (another session or a
+    # TMPDIR-based one): a component that starts with claude- or that holds a
+    # glob whose literal prefix can start it, at any depth, is OUTSIDE. This
+    # comes before the top-level glob test, so a scratchpad word that is not
+    # yet known is OUTSIDE (the lookup then decides) and never BARE.
+    for (i = 1; i <= nT; i++) if (index(p, T[i] "/") == 1) {
+      n = split(substr(p, length(T[i]) + 2), c, "/")
+      for (k = 1; k <= n; k++) {
+        lc = tolower(c[k])
+        if (index(lc, "claude-") == 1) return "OUTSIDE"
+        k2 = gpos(lc)
+        if (k2 > 0) {
+          pre = substr(lc, 1, k2 - 1)
+          if (pre == "" || substr("claude-", 1, length(pre)) == pre) return "OUTSIDE"
+        }
+      }
+      gd = (T[i] == "/var/folders") ? 4 : 1
+      for (k = 1; k <= n && k <= gd; k++) if (gpos(c[k]) > 0) return "BARE"
+      usedT = 1
+      return ""
+    }
+    return "OUTSIDE"
+  }
+  if (k == 0) return "BARE"
+  # The lane root (three literal components): outside, as the project root.
+  if (k == 3 && cc[1] == ".claude" && cc[2] == "worktrees" && gpos(w) == 0) return "OUTSIDE"
+  if (cl) {
+    # Only when the view holds an absolute word that is harmless through a
+    # temp tree (usedT, switched on in END): a relative word is judged by the
+    # Claude-tree tests too.
+    for (i = 1; i <= k; i++) {
+      lc = tolower(cc[i])
+      if (index(lc, "claude-") == 1) return "OUTSIDE"
+      k2 = gpos(lc)
+      if (k2 > 0) {
+        pre = substr(lc, 1, k2 - 1)
+        if (pre == "" || substr("claude-", 1, length(pre)) == pre) return "OUTSIDE"
+      }
+    }
+  }
+  return below(cc, k, w)
+}
+# The first component below a root (or of a relative word): .claude or a glob
+# that can match it is BARE, except a lane path: the literal components
+# .claude, worktrees, a lane name and at least one more, with no glob
+# character anywhere in the word. The component after the lane name is then
+# judged by the same rule; the lane root itself (three components) is not
+# harmless.
+function below(d, n, w) {
+  if (n < 1) return ""
+  if (!gm(tolower(d[1]), ".claude")) return ""
+  if (d[1] == ".claude" && d[2] == "worktrees" && n >= 4 && gpos(w) == 0) {
+    if (gm(tolower(d[4]), ".claude")) return "BARE"
+    return ""
+  }
+  return "BARE"
+}
+# The position of the first glob character (* ? [ ^ # ~) of s, 0 if none; plain
+# index() tests, so every awk reads the set the same way.
+function gpos(s,   m, x) {
+  m = 0
+  x = index(s, "*"); if (x > 0 && (m == 0 || x < m)) m = x
+  x = index(s, "?"); if (x > 0 && (m == 0 || x < m)) m = x
+  x = index(s, "["); if (x > 0 && (m == 0 || x < m)) m = x
+  x = index(s, "^"); if (x > 0 && (m == 0 || x < m)) m = x
+  x = index(s, "#"); if (x > 0 && (m == 0 || x < m)) m = x
+  x = index(s, "~"); if (x > 0 && (m == 0 || x < m)) m = x
+  return m
+}
+function under(p, d) { return (p == d || index(p, d "/") == 1) }
+function clean(s,   t) {
+  t = s
+  while (index(t, "//") > 0) gsub(/\/\/+/, "/", t)
+  while (length(t) > 1 && substr(t, length(t), 1) == "/") t = substr(t, 1, length(t) - 1)
+  return t
+}
+function load(env, arr,   n, v, i, m, c) {
+  n = split(ENVIRON[env], v, "\n"); m = 0
+  for (i = 1; i <= n; i++) { c = clean(v[i]); if (c != "" && c != "/") arr[++m] = c }
+  return m
+}
+# A glob (* and ? only) against a name; a [ class (a [ with a ] after it)
+# cannot be judged here and counts as a match (fail closed). A lone [ or ] is
+# a literal, as in `[ -d x ]`.
+function gm(p, s,   pi, si, np, ns, star, ss, pc, b) {
+  if (index(p, "^") > 0 || index(p, "#") > 0 || index(p, "~") > 0) return 1
+  b = index(p, "[")
+  if (b > 0 && index(substr(p, b + 1), "]") > 0) return 1
+  np = length(p); ns = length(s); pi = 1; si = 1; star = 0; ss = 0
+  while (si <= ns) {
+    pc = substr(p, pi, 1)
+    if (pi <= np && pc == "*") { star = pi; ss = si; pi++ }
+    else if (pi <= np && (pc == "?" || pc == substr(s, si, 1))) { pi++; si++ }
+    else if (star) { pi = star + 1; ss++; si = ss }
+    else return 0
+  }
+  while (pi <= np && substr(p, pi, 1) == "*") pi++
+  return pi > np
+}
+BEGIN {
+  MK = "\001"
+  nR = load("MK_D_ROOTS", R); nS = load("MK_D_SCR", S); nC = load("MK_D_CWDS", C)
+  # A temp tree stays out of the harmless set when the root or the cwd lies
+  # at or below it (either spelling of /tmp and of /var/folders).
+  skA = 0; skB = 0
+  for (i = 1; i <= nR + nC; i++) {
+    x = (i <= nR) ? R[i] : C[i - nR]
+    if (under(x, "/tmp") || under(x, "/private/tmp")) skA = 1
+    if (under(x, "/var/folders") || under(x, "/private/var/folders")) skB = 1
+  }
+  nT = 0
+  if (!skA) { T[++nT] = "/tmp"; T[++nT] = "/private/tmp" }
+  if (!skB) T[++nT] = "/var/folders"
+}
+{
+  line = $0
+  # A # is a comment marker only at the line start or after a blank that is
+  # not backslash-escaped: mark it on the raw line, before quotes and
+  # backslashes go. The marker bytes are private: a view that holds one is
+  # denied (never cleaned: the shell would keep the byte).
+  if (index(line, "\001") > 0 || index(line, "\002") > 0 || index(line, "\003") > 0) cb = 1
+  gsub(/\\[ \t]/, "\003", line)
+  gsub(/^#/, "\002", line)
+  gsub(/[ \t]#/, " \002", line)
+  gsub(/\003/, " ", line)
+  if (index(line, "$\047") > 0 || index(line, "$\"") > 0) dq = 1
+  gsub(/["\047\\]/, "", line)
+  # A backquote ends and starts a command: it is a separator, and a triggered
+  # view that holds one anywhere is an expansion (bq: its first word).
+  if (bq == "" && (bi = index(line, "`")) > 0) { bq = substr(line, bi); sub(/[[:space:];|&<>()].*/, "", bq) }
+  # A ( glued to the byte before it is grouping or extended glob syntax
+  # (c@(x) !(x) claude(-) f()): BARE, whatever else the view holds. $( stays
+  # an expansion.
+  if (gp == "" && match(line, /[^[:space:];|&<>($]\(/)) {
+    gp = substr(line, 1, RSTART); sub(/.*[[:space:]]/, "", gp); gp = gp "("
+  }
+  # A ) glued to the byte after it ((.c|x)laude): the same, kept for after
+  # the word pass so $(…)/x stays an expansion.
+  if (gc == "" && match(line, /\)[^[:space:];|&<>)]/)) {
+    gc = substr(line, 1, RSTART - 1); sub(/.*[[:space:]]/, "", gc)
+    gr = substr(line, RSTART); sub(/[[:space:]].*/, "", gr); gc = gc gr
+  }
+  gsub(/[;|&<>()`]/, " \001 ", line)
+  k = split(line, parts, /[[:space:]]+/)
+  for (j = 1; j <= k; j++) {
+    if (parts[j] == "") continue
+    if (parts[j] == MK) { W[++nw] = MK; continue }
+    m = split(parts[j], sub_, "=")
+    for (q = 1; q <= m; q++) if (sub_[q] != "") W[++nw] = sub_[q]
+  }
+  W[++nw] = MK
+}
+END {
+  for (i = 1; i <= nw; i++) {
+    if (W[i] == MK) continue
+    x = tolower(W[i]); sub(/^.*\//, "", x); L[i] = x
+    # A name with an expansion glued on (rm${IFS}-rf) is a trigger word too.
+    # Cut first, then strip the directory: rm$x/abs and /bin/rm$x/abs are rm
+    # (the strip alone leaves the last component of the glued tail).
+    y = x; if (match(y, /[$`{]/)) y = substr(y, 1, RSTART - 1)
+    z = tolower(W[i]); if (match(z, /[$`{]/)) z = substr(z, 1, RSTART - 1)
+    sub(/^.*\//, "", z)
+    if (y ~ /^(rm|mv|rsync|rmdir|unlink|shred)$/ || z ~ /^(rm|mv|rsync|rmdir|unlink|shred)$/) trig = 1
+    if (x == "find" || z == "find") { anyfind = 1; L[i] = "find" }
+    if (W[i] == "-delete") hasdel = 1
+  }
+  if (anyfind && hasdel) trig = 1
+  # A dollar-quote (dollar, quote, text, quote) loses its dollar in the shell:
+  # r$'"'"'m'"'"' is rm. With one in the view, a word that equals a trigger name or
+  # -delete once every dollar is removed is read as that name (the word still
+  # holds a dollar, so it is judged an expansion).
+  if (dq) for (i = 1; i <= nw; i++) {
+    if (W[i] == MK) continue
+    u = W[i]; gsub(/[$]/, "", u)
+    x = tolower(u); sub(/^.*\//, "", x)
+    if (x ~ /^(rm|mv|rsync|rmdir|unlink|shred)$/) trig = 1
+    if (x == "find") { anyfind = 1; L[i] = "find" }
+    if (u == "-delete") hasdel = 1
+  }
+  if (anyfind && hasdel) trig = 1
+  if (!trig) { print "OK"; exit 0 }
+  if (cb) { print "HIT\tBARE\t(control byte)"; exit 0 }
+  if (gp != "") { gsub(/\002/, "", gp); print "HIT\tBARE\t" gp; exit 0 }
+  why = ""; word = ""
+  fs = 0
+  for (i = 1; i <= nw && why == ""; i++) {
+    if (W[i] == MK) { fs = 0; continue }
+    c = judge(W[i])
+    # A glob in a find start directory (before its first option) is BARE.
+    if (c == "" && fs && gpos(W[i]) > 0) c = "BARE"
+    if (L[i] == "find") fs = 1
+    else if (substr(W[i], 1, 1) ~ /[-!(]/) fs = 0
+    # A find word needs a start directory: GNU find reads none as ".".
+    if (c == "" && L[i] == "find" && (i == nw || W[i + 1] == MK)) c = "BARE"
+    if (c == "" && i > 1 && L[i - 1] == "find" && substr(W[i], 1, 1) ~ /[-!]/) c = "BARE"
+    if (c != "") { why = c; word = W[i] }
+  }
+  if (why == "" && bq != "") { why = "EXPANSION"; word = bq }
+  if (why == "" && gc != "") { why = "BARE"; word = gc }
+  # An absolute word that is harmless only through a temp tree (a cd, pushd or
+  # -C target or any other): every relative word is judged by the Claude-tree
+  # tests too. A directory change into the project or the scratchpad does not
+  # switch them on.
+  if (why == "" && usedT) {
+    cl = 1
+    for (i = 1; i <= nw && why == ""; i++) {
+      if (W[i] == MK || substr(W[i], 1, 1) == "/") continue
+      c = judge(W[i])
+      if (c != "") { why = c; word = W[i] }
+    }
+    cl = 0
+  }
+  # Paths that are not words: a pipe that feeds operands, a cd with no path.
+  for (i = 1; i <= nw && why == ""; i++) {
+    if (W[i] == MK) continue
+    if (L[i] == "xargs" || L[i] == "parallel") { why = "PIPE"; word = W[i] }
+    else if (L[i] == "cd" || L[i] == "pushd" || L[i] == "popd") {
+      if (W[i + 1] == MK || substr(W[i + 1], 1, 1) == "-" || judge(W[i + 1]) != "") { why = "PIPE"; word = W[i] }
+    }
+  }
+  if (why == "") {
+    ok = 0
+    for (i = 1; i <= nC && !ok; i++) {
+      for (j = 1; j <= nR && !ok; j++) if (under(C[i], R[j])) ok = 1
+      for (j = 1; j <= nS && !ok; j++) if (under(C[i], S[j])) ok = 1
+    }
+    if (!ok) { why = "CWD"; word = (nC > 0 ? C[1] : "(none)") }
+  }
+  if (why == "") print "OK"
+  else { gsub(/\002/, "", word); print "HIT\t" why "\t" word }
+  exit 0
+}'
+_MK_GS_DEL_SCR=""; _MK_GS_DEL_INIT=0; _MK_GS_DEL_WHY=""; _MK_GS_DEL_WORD=""
+_MK_GS_DEL_PWHY=""; _MK_GS_DEL_PWORD=""
+# _mk_gs_del_scr -- once: the session scratchpad spellings (lib/temp.sh,
+# physical and logical) into _MK_GS_DEL_SCR. A failing lookup leaves none.
+_mk_gs_del_scr() {
+  [ "$_MK_GS_DEL_INIT" = 1 ] && return 0
+  _MK_GS_DEL_INIT=1
+  # shellcheck source-path=SCRIPTDIR source=lib/temp.sh
+  . "$MK_LIB_DIR/temp.sh" 2>/dev/null || return 0
+  mk_temp_init "${PAYLOAD:-}" 2>/dev/null || return 0
+  [ -n "${MK_TEMP_SESSION_DIR:-}" ] || return 0
+  _MK_GS_DEL_SCR="$MK_TEMP_SESSION_DIR/scratchpad"
+  if [ -n "${MK_TEMP_ROOT_LOGICAL:-}" ]; then
+    _MK_GS_DEL_SCR="$_MK_GS_DEL_SCR
+$MK_TEMP_ROOT_LOGICAL/$MK_TEMP_SLUG/$MK_TEMP_SESSION_ID/scratchpad"
+  fi
+  return 0
+}
+# _mk_gs_del_run VIEW -- the awk's one line: OK, or HIT<TAB>WHY<TAB>WORD.
+_mk_gs_del_run() {
+  printf '%s\n' "$1" | MK_D_ROOTS="${MK_ROOT:-}
+${_MK_GS_PROOT:-}" MK_D_SCR="$_MK_GS_DEL_SCR" MK_D_CWDS="$_MK_GS_CWD
+${_mk_gs_pcwd:-}" LC_ALL=C awk "$_MK_GS_DEL_AWK"
+}
+_mk_gs_del_hit() {
+  local view="$1" out tab="	"
+  # Prefilter (no process; a superset of the awk's trigger). The awk drops
+  # quotes and backslashes and splits on blanks and ; | & < > ( ) =; a trigger
+  # name stands as a whole word there (after one of those or a /, and before
+  # one). Without a quote or backslash the same boundaries are used here; with
+  # one, a name may be glued from quoted pieces (r''m), so the names are
+  # matched as substrings with quote characters allowed between the letters
+  # (no ${//} stripping: quadratic on a 64 KiB view in bash 3.2).
+  # shellcheck disable=SC2016  # a regex, not an expansion
+  local LC_ALL=C re Q='' b1='(^|[[:space:];|&<>()=/`])' b2='($|[[:space:];|&<>()=`${])'
+  case "$view" in
+    *'"'*|*"'"*|*\\*)
+      b1=''; b2=''; Q='["'"'"'\\$]*'
+      re="[rR]${Q}[mM]|[mM]${Q}[vV]|[rR]${Q}[sS]${Q}[yY]${Q}[nN]${Q}[cC]|[uU]${Q}[nN]${Q}[lL]${Q}[iI]${Q}[nN]${Q}[kK]|[sS]${Q}[hH]${Q}[rR]${Q}[eE]${Q}[dD]" ;;
+    *) re="${b1}([rR][mM]|[mM][vV]|[rR][sS][yY][nN][cC]|[rR][mM][dD][iI][rR]|[uU][nN][lL][iI][nN][kK]|[sS][hH][rR][eE][dD])${b2}" ;;
+  esac
+  if ! [[ $view =~ $re ]]; then
+    case "$view" in
+      *'"'*|*"'"*|*\\*) re="-${Q}[dD]${Q}[eE]${Q}[lL]${Q}[eE]${Q}[tT]${Q}[eE]"; [[ $view =~ $re ]] || return 1 ;;
+      *-delete*) ;;
+      *) return 1 ;;
+    esac
+    re="${b1}[fF]${Q}[iI]${Q}[nN]${Q}[dD]${b2}"
+    [[ $view =~ $re ]] || return 1
+  fi
+  out="$(_mk_gs_del_run "$view")" || return 2
+  case "$out" in
+    HIT"$tab"OUTSIDE"$tab"*|HIT"$tab"CWD"$tab"*|HIT"$tab"PIPE"$tab"*)
+      # The scratchpad trees may excuse these: look them up (once), judge again.
+      if [ "$_MK_GS_DEL_INIT" = 0 ]; then
+        _mk_gs_del_scr
+        out="$(_mk_gs_del_run "$view")" || return 2
+      fi ;;
+  esac
+  case "$out" in
+    OK) return 1 ;;
+    HIT"$tab"*"$tab"*)
+      out="${out#HIT"$tab"}"
+      _MK_GS_DEL_WHY="${out%%"$tab"*}"
+      _MK_GS_DEL_WORD="${out#*"$tab"}"
+      case "$_MK_GS_DEL_WHY" in EXPANSION|OUTSIDE|BARE|CWD|PIPE) ;; *) return 2 ;; esac
+      [ -n "$_MK_GS_DEL_WORD" ] || return 2
+      return 0 ;;
+  esac
+  return 2
+}
+# _mk_gs_del_deny -- the deny for the first hit kept by _mk_gs_cfg_set (none:
+# nothing happens).
+_mk_gs_del_deny() {
+  case "$_MK_GS_DEL_PWHY" in
+    '') return 0 ;;
+    EXPANSION) deny "$(mk_msg GS_DEL_EXPANSION "$_MK_GS_DEL_PWORD")" ;;
+    OUTSIDE) deny "$(mk_msg GS_DEL_OUTSIDE "$_MK_GS_DEL_PWORD")" ;;
+    BARE) deny "$(mk_msg GS_DEL_BARE "$_MK_GS_DEL_PWORD")" ;;
+    CWD) deny "$(mk_msg GS_DEL_CWD "$_MK_GS_DEL_PWORD")" ;;
+    *) deny "$(mk_msg GS_DEL_PIPE "$_MK_GS_DEL_PWORD")" ;;
+  esac
+}
+# --- DEL-GATE END -----------------------------------------------------------
 # _mk_gs_cfg_set VIEW FIRST -- the config gate, then the settings gate (its
 # bounds are checked first; a settings write is named as such even when the
 # config gate also hits, as a $HOME/.claude word does), then the plugin gate.
@@ -2434,6 +2378,15 @@ _mk_gs_cfg_set() {
   [ "$src" = 0 ] && deny "$(mk_msg GS_SETTINGS_EDIT "$2")"
   [ "$rc" = 0 ] && deny "$(mk_msg GS_CONFIG_EDIT "$2")"
   [ "$src" = 3 ] && deny "$(mk_msg GS_SETTINGS_EDIT "$2")"
+  # The coarse delete/move gate (0.8.5): after the settings and old config
+  # denies, before the plugin gate.
+  _mk_gs_del_hit "$1"; src=$?
+  [ "$src" = 2 ] && deny "$(mk_msg GS_TOO_LARGE "$2")"
+  # Not denied yet: a later view may hit the old config gate or the settings
+  # gate, and those texts win; the first new hit is denied after every view.
+  if [ "$src" = 0 ] && [ -z "$_MK_GS_DEL_PWHY" ]; then
+    _MK_GS_DEL_PWHY="$_MK_GS_DEL_WHY"; _MK_GS_DEL_PWORD="$_MK_GS_DEL_WORD"
+  fi
   _mk_gs_plug_hit "$1"; src=$?
   [ "$src" = 2 ] && deny "$(mk_msg GS_TOO_LARGE "$2")"
   [ "$src" = 0 ] && deny "$(mk_msg GS_PLUGIN_EDIT "$2")"
@@ -2459,7 +2412,6 @@ _mk_gs_rule3() {
 }
 _mk_gs_rule3_one() {
   local view="$1" first flat out line seg rc fv
-  _MK_GS_RAWV="$view"; _MK_GS_FLATT=""; _MK_GS_ADJ=""; _MK_GS_ANSI=""; _MK_GS_RQH=""
   # The first line, by sed: ${view%%<newline>*} on a 64 KiB view took 0.6 s
   # under a UTF-8 locale (bash 3.2).
   first="$(printf '%s\n' "$view" | sed -n 1p)"
@@ -2481,9 +2433,7 @@ _mk_gs_rule3_one() {
   if [ "$flat" != "$view" ]; then
     if _mk_gs_win_hit "$flat"; then deny "$(mk_msg GS_WINDOW_REQUEST "$first")"; fi
     if _mk_gs_ss_hit "$flat"; then deny "$(mk_msg GS_SESSION_START "$first")"; fi
-    _MK_GS_FLATV=1; _MK_GS_FLATT="$flat"
     _mk_gs_cfg_set "$flat" "$first"
-    _MK_GS_FLATV=0
   fi
   if [ "${MK_REMOTE_ENABLED:-0}" = 1 ]; then
     if command -v mk_remote_scan >/dev/null 2>&1; then
@@ -2492,12 +2442,12 @@ _mk_gs_rule3_one() {
         line="${out%%$'\n'*}"
         seg="${line#*$'\t'}"; seg="${seg#*$'\t'}"
         case "$line" in unparsed*) seg="" ;; esac
-        [ -n "$out" ] && deny "$(mk_msg GS_REMOTE "${seg:-$first}")"
+        [ -n "$out" ] && { _mk_gs_del_deny; deny "$(mk_msg GS_REMOTE "${seg:-$first}")"; }
       else
-        deny "$(mk_msg GS_REMOTE "$first")"
+        _mk_gs_del_deny; deny "$(mk_msg GS_REMOTE "$first")"
       fi
     else
-      deny "$(mk_msg GS_REMOTE "$first")"
+      _mk_gs_del_deny; deny "$(mk_msg GS_REMOTE "$first")"
     fi
   fi
 }
@@ -2509,6 +2459,7 @@ if [ "${MK_REMOTE_ENABLED:-0}" = 1 ]; then
 fi
 _mk_gs_rule3 "$CMD_ORIG"
 [ "$CMD" = "$CMD_ORIG" ] || _mk_gs_rule3 "$CMD"
+_mk_gs_del_deny
 
 # Split into segments on shell separators so `foo && git commit` is inspected
 # as its own command, not as an argument to foo. `(`, `)`, `{`, `}` and a
