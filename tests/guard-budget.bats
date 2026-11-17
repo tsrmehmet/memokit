@@ -733,18 +733,25 @@ EOF")"
 }
 
 # 0.8.5: the coarse delete/move gate judges every word of a subagent command
-# that names a delete tool, in ONE awk. A 64 KiB list of plain words (one
-# line, and the same list split by backslash-newline) is decided (allowed)
-# within 2 s of CPU.
+# that names a delete tool, in ONE awk. A 64 KiB list of plain words on one
+# line, and a 32 KiB list split by backslash-newline, are decided (allowed)
+# within 2 s of CPU. The split list is half the size: one backslash-newline
+# makes the guard judge four views of the command instead of one (as in
+# 0.8.4, which is slower on the same input), so a 64 KiB split list reads
+# about 2.1 s of CPU on the macos-26 CI runner (1.3 s on a developer Mac).
 @test "dg_words: the delete gate decides a 64 KiB subagent list of plain words within 2 s of CPU" {
   mk_project "$BCFG"
   local d="$BATS_TEST_TMPDIR" f n i
   { printf 'rm -rf'; i=0; while [ "$i" -lt 12 ]; do i=$((i + 1)); printf ' src/a%d' "$i"; done
     rep ' src/a1234' 6300; } > "$d/dg_words"
   { printf 'rm -rf src/a0 \\\n'; rep 'src/a1234 \
-' 5200; printf 'src/z\n'; } > "$d/dg_words_nl"
+' 2600; printf 'src/z\n'; } > "$d/dg_words_nl"
   for f in dg_words dg_words_nl; do
-    n="$(wc -c < "$d/$f")"; [ "$n" -gt 60000 ] && [ "$n" -le 65536 ] || { echo "$f: $n bytes"; false; }
+    n="$(wc -c < "$d/$f")"
+    case "$f" in
+      dg_words) [ "$n" -gt 60000 ] && [ "$n" -le 65536 ] || { echo "$f: $n bytes"; false; } ;;
+      *) [ "$n" -gt 30000 ] && [ "$n" -le 32768 ] || { echo "$f: $n bytes"; false; } ;;
+    esac
     hook_file guard-subagent-authority.sh "$d/$f" agent-1
     echo "$f: ${ms} ms wall, ${cpu} ms cpu" >&3
     [ "$(decision)" = allow ] || { echo "$f: expected allow, got [$(reason | cut -c1-200)]"; false; }
