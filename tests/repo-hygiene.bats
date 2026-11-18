@@ -44,10 +44,13 @@ load helpers
   grep -qF '`remote.hosts[]`' "$MK_REPO/README.md"
   grep -qF '`careful.patterns[].target`' "$MK_REPO/README.md"
 }
-@test "changelog: 0.8.5 entry matches plugin.json version" {
+@test "changelog: 0.8.6 entry matches plugin.json version" {
   v="$(jq -r .version "$MK_REPO/.claude-plugin/plugin.json")"
-  [ "$v" = "0.8.5" ]
+  [ "$v" = "0.8.6" ]
   sed -n '5,12p' "$MK_REPO/CHANGELOG.md" | grep -qF "## $v "
+  awk '/^## 0\.8\.6/{p=1;next} /^## /{p=0} p' "$MK_REPO/CHANGELOG.md" | grep -qF '### Guards'
+}
+@test "changelog: 0.8.5 entry is still present" {
   awk '/^## 0\.8\.5/{p=1;next} /^## /{p=0} p' "$MK_REPO/CHANGELOG.md" | grep -qF '### Guards'
 }
 @test "changelog: 0.8.4 entry is still present" {

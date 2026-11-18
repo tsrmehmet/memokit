@@ -347,7 +347,7 @@ EOF4
       if printf '%s %s\n' "$rmd" "$left" > "$tmp"; then mv -f "$tmp" "$res" || rm -f "$tmp"; else rm -f "$tmp"; fi
     }
   fi
-  rmdir "$lock" 2>/dev/null
+  mk_lock_drop "$lock"
   return 0
 }
 # _ss_wt_autoclean -- sets WT_AUTO_TXT, and WT_REPORT=0 when the job runs.
@@ -367,11 +367,11 @@ _ss_wt_autoclean() {
     esac
   fi
   # A lock older than an hour is from a job that died.
-  if [ -d "$lock" ] && [ ! -L "$lock" ]; then
+  if [ -d "$lock" ] && [ ! -L "$lock" ] && [ -O "$lock" ]; then
     t="$(mk_temp_mtime "$lock")" || t=0
-    [ $(( $(date +%s) - t )) -ge 3600 ] && rmdir "$lock" 2>/dev/null
+    [ $(( $(date +%s) - t )) -ge 3600 ] && mk_lock_drop "$lock"
   fi
-  mkdir "$lock" 2>/dev/null || return 0
+  mk_lock_take "$lock" || return 0
   from="$MK_ROOT"; [ -n "$wt_cwd" ] && [ -d "$wt_cwd" ] && from="$wt_cwd"
   _ss_bg _ss_wt_job "$MK_ROOT" "$from" "$res" "$lock"
   [ "$known" -eq 1 ] && return 0

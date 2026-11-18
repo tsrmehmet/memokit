@@ -475,9 +475,11 @@ u1() {
     done
   done
   for c in "rm -rf $L" "rm -rf $ROOT/.claude/worktrees" "rm -rf .claude/worktrees/mk-r1-a" "rm -rf $ROOT/.claude/worktrees/*/src" \
-    "rm -rf $L/../x" "rm -rf $L/.claude" "cd $L && rm -rf dist" "git -C $L mv src/a.ts src/b.ts"; do
+    "rm -rf $L/../x" "rm -rf $L/.claude" "true; cd $L && rm -rf dist" "git -C $L mv src/a.ts src/b.ts"; do
     denied "$c" || return 1
   done
+  # 0.8.6: the cd that opens the command is excused.
+  allowed "cd $L && rm -rf dist" || return 1
 }
 
 # I1: after a directory change into a temp tree (or with any word harmless only
@@ -561,4 +563,276 @@ u1() {
   u 'rm -rf .claude/worktrees' BARE .claude/worktrees || return 1
   u 'rm -rf .claude/worktrees/*' BARE '.claude/worktrees/*' || return 1
   dn_new 'cd .claude/worktrees/L && rm -rf dist' "drop the" .claude/worktrees/L || return 1
+}
+
+# 0.8.6: a leading `cd <root>` (or `cd <lane root>`) is excused; nothing else is.
+# ul1 CMD [ROOT] -- the lead rule, then the gate: passes.
+ul1() {
+  local r="${2:-/Users/u/p}" got
+  got="$("$MK_BASH" -c 'set -f; . "$1"; MK_ROOT=$2; _MK_GS_PROOT=$2; _MK_GS_CWD=$2; _MK_GS_DEL_SCR=; _MK_GS_DEL_INIT=1
+    _mk_gs_del_lead "$3"; _mk_gs_del_hit "$3"; echo "$? $_MK_GS_DEL_WHY $_MK_GS_DEL_WORD"' _ "$BATS_TEST_TMPDIR/del.sh" "$r" "$1")"
+  case "$got" in "1 "*) ;; *) echo "unit: $1 -> '$got' (want pass)"; return 1 ;; esac
+}
+# ul CMD WHY WORD [ROOT] -- the lead rule, then the gate: rc 0, the class, the word.
+ul() {
+  local r="${4:-/Users/u/p}" got
+  got="$("$MK_BASH" -c 'set -f; . "$1"; MK_ROOT=$2; _MK_GS_PROOT=$2; _MK_GS_CWD=$2; _MK_GS_DEL_SCR=; _MK_GS_DEL_INIT=1
+    _mk_gs_del_lead "$3"; _mk_gs_del_hit "$3"; echo "$? $_MK_GS_DEL_WHY $_MK_GS_DEL_WORD"' _ "$BATS_TEST_TMPDIR/del.sh" "$r" "$1")"
+  [ "$got" = "0 $2 $3" ] || { echo "unit: $1 -> '$got' (want '0 $2 $3')"; return 1; }
+}
+
+@test "unit: a leading cd to the root or a lane root is excused" {
+  local R=/Users/u/p L=/Users/u/p/.claude/worktrees/mk-1.2_x nl='
+'
+  ul1 "cd $R && rm -f a.o" || return 1
+  ul1 "cd $R&&rm -f a.o" || return 1
+  ul1 "cd $R; rm -rf dist" || return 1
+  ul1 "cd $R ; mv src/a.ts src/b.ts" || return 1
+  ul1 "cd $R${nl}rm -rf dist" || return 1
+  ul1 "cd $R ${nl}rm -rf dist" || return 1
+  ul1 "cd $R && rm $R/src/a.ts" || return 1
+  ul1 "cd $R && find src -name '*.pyc' -delete" || return 1
+  ul1 "cd $R && git commit -q -m 'rm the old file' && rm -f \"a b.txt\"" || return 1
+  ul1 "cd $L && rm -rf dist" || return 1
+  ul1 "cd $L; mv src/a.ts src/b.ts" || return 1
+  ul1 "cd /srv/a-b_c.d/@x%+,:1 && rm x" /srv/a-b_c.d/@x%+,:1 || return 1
+}
+
+@test "unit: after a leading cd every other word is judged as before" {
+  local R=/Users/u/p L=/Users/u/p/.claude/worktrees/L
+  ul "cd $R && rm -rf $R" OUTSIDE "$R" || return 1
+  ul "cd $R && rm -rf $R/" OUTSIDE "$R/" || return 1
+  ul "cd $R && git -C $R rm x" OUTSIDE "$R" || return 1
+  ul "cd $R && rm -rf ." BARE . || return 1
+  ul "cd $R && rm -rf *" BARE '*' || return 1
+  ul "cd $R && rm -rf .claude" BARE .claude || return 1
+  ul "cd $R && cd .. && rm -rf p" OUTSIDE .. || return 1
+  ul "cd $R; cd /etc && rm x" OUTSIDE /etc || return 1
+  ul "cd $R && rm -rf \$HOME/x" EXPANSION '$HOME/x' || return 1
+  ul "cd $R && ls | xargs rm" PIPE xargs || return 1
+  ul "cd $L && rm -rf $L" OUTSIDE "$L" || return 1
+  ul "cd $L && rm -rf .claude" BARE .claude || return 1
+  ul "cd $R && cd $L && rm x" OUTSIDE "$L" || return 1
+}
+
+@test "unit: a cd to the root that is not the leading one stays denied" {
+  local R=/Users/u/p nl='
+'
+  ul " cd $R && rm x" OUTSIDE "$R" || return 1
+  ul "cd  $R && rm x" OUTSIDE "$R" || return 1
+  ul "cd $R/ && rm x" OUTSIDE "$R/" || return 1
+  ul "cd \"$R\" && rm x" OUTSIDE "$R" || return 1
+  ul "cd '$R' && rm x" OUTSIDE "$R" || return 1
+  ul "cd $R || rm x" OUTSIDE "$R" || return 1
+  ul "cd $R | rm x" OUTSIDE "$R" || return 1
+  ul "cd $R & rm x" OUTSIDE "$R" || return 1
+  ul "cd $R rm -rf x" OUTSIDE "$R" || return 1
+  ul "cd $R -P; rm x" OUTSIDE "$R" || return 1
+  ul "cd -P $R; rm x" OUTSIDE "$R" || return 1
+  ul "cd $R \\${nl}&& rm x" OUTSIDE "$R" || return 1
+  ul "cd $R\\${nl}/.. && rm -rf p" OUTSIDE "$R" || return 1
+  ul "pushd $R && rm x" OUTSIDE "$R" || return 1
+  ul "CD $R && rm x" OUTSIDE "$R" || return 1
+  ul "true; cd $R && rm x" OUTSIDE "$R" || return 1
+  ul "rm -rf \"x;cd\" $R" OUTSIDE "$R" || return 1
+  ul "rm x >| cd $R" OUTSIDE "$R" || return 1
+  ul "rm -rf x${nl}cd $R; rm y" OUTSIDE "$R" || return 1
+  ul "cd /Users/u/p2 && rm x" OUTSIDE /Users/u/p2 || return 1
+  ul "cd /Users/u && rm -rf p" OUTSIDE /Users/u || return 1
+  ul "cd $R/.claude/worktrees/.. && rm -rf x" OUTSIDE "$R/.claude/worktrees/.." || return 1
+  ul "cd $R/.claude/worktrees/. && rm -rf L" BARE "$R/.claude/worktrees/." || return 1
+  ul "cd $R/.claude/worktrees/ && rm -rf L" BARE "$R/.claude/worktrees/" || return 1
+  ul "cd $R/.claude/worktrees/L* && rm -rf x" BARE "$R/.claude/worktrees/L*" || return 1
+  ul "cd $R/.claude/worktrees/L/ && rm -rf x" OUTSIDE "$R/.claude/worktrees/L/" || return 1
+}
+
+@test "unit: a root the shell would not read literally is not excused" {
+  ul 'cd /Users/u/$p && rm x' EXPANSION '/Users/u/$p' '/Users/u/$p' || return 1
+  ul 'cd /Users/u/p* && rm x' OUTSIDE '/Users/u/p*' '/Users/u/p*' || return 1
+  ul 'cd /Users/u/a=b && rm x' OUTSIDE /Users/u/a '/Users/u/a=b' || return 1
+  ul 'cd /Users/u/pé && rm x' OUTSIDE '/Users/u/pé' '/Users/u/pé' || return 1
+}
+
+@test "unit: without the lead rule's word the gate is unchanged" {
+  u "cd /Users/u/p && rm -f a.o" OUTSIDE /Users/u/p || return 1
+}
+
+@test "e2e: a leading cd to the project root or a lane root passes" {
+  local c L="$ROOT/.claude/worktrees/mk-1" P
+  P="$(cd -P "$ROOT" && pwd -P)"
+  mkdir -p "$L"
+  for c in "cd $ROOT && rm -rf dist" "cd $ROOT; mv src/a.ts src/b.ts" "cd $P && rm -f src/a.o" \
+    "cd $L && rm -rf dist" "cd $ROOT
+cat > notes.txt <<'EOF'
+rm the old file
+EOF"; do
+    allowed "$c" || return 1
+  done
+  for c in "cd $ROOT && rm -rf $ROOT" " cd $ROOT && rm -rf dist" "cd $ROOT && rm -rf ." "true; cd $ROOT && rm x" \
+    "cd \"$ROOT\" && rm x" "cd $ROOT \\
+&& rm x" "cd $ROOT && rm -rf .claude" "rm -rf \"x;cd\" $ROOT" "git -C $ROOT rm x"; do
+    denied "$c" || return 1
+  done
+}
+
+# 0.8.6: the session scratchpad itself is a harmless word (`rm -rf <sp>/x; ls <sp>`).
+@test "unit: the scratchpad itself is harmless; above it and a root inside it are not" {
+  local R=/Users/u/p SP=/private/tmp/claude-501/x/y/scratchpad
+  u1 "rm -rf $SP/coder-s1; ls $SP" $R $R $SP || return 1
+  u1 "ls $SP/; rm -rf $SP/a" $R $R $SP || return 1
+  u1 "cd $SP && rm -rf coder-s1" $R $R $SP || return 1
+  u1 "rm -rf $SP" $R $R $SP || return 1
+  u1 "mv $SP//./ $SP/x" $R $R $SP || return 1
+  u "rm -rf $SP/.." OUTSIDE "$SP/.." $R $R $SP || return 1
+  u "rm -rf /private/tmp/claude-501/x/y" OUTSIDE /private/tmp/claude-501/x/y $R $R $SP || return 1
+  u "rm -rf /private/tmp/claude-501/x/y/scratchpad2" OUTSIDE /private/tmp/claude-501/x/y/scratchpad2 $R $R $SP || return 1
+  u "cd $SP && rm -rf *" BARE '*' $R $R $SP || return 1
+  u "cd $SP && rm -rf ." BARE . $R $R $SP || return 1
+  u "rm -rf $SP" OUTSIDE "$SP" $R $R || return 1
+  # A project that lies inside the scratchpad: the root and every ancestor of it stay outside.
+  u "rm -rf $SP" OUTSIDE "$SP" $SP/proj $SP/proj $SP || return 1
+  u "rm -rf $SP/proj" OUTSIDE "$SP/proj" $SP/proj $SP/proj $SP || return 1
+  u "rm -rf $SP/a" OUTSIDE "$SP/a" $SP/a/proj $SP/a/proj $SP || return 1
+  u "rm -rf $SP" OUTSIDE "$SP" $SP $SP $SP || return 1
+  u1 "rm -rf $SP/proj/dist $SP/other" $SP/proj $SP/proj $SP || return 1
+}
+
+@test "e2e: cleaning a scratchpad child and listing the scratchpad passes" {
+  allowed "rm -rf $TT_SP/coder-s3; ls $TT_SP" || return 1
+  allowed "cd $TT_SP && rm -rf coder-s3" || return 1
+  denied "rm -rf $TT_SP/.." || return 1
+  denied "rm -rf ${TT_SP%/scratchpad}" || return 1
+}
+
+# 0.8.6: the body of a quoted heredoc that feeds python or node is not shell
+# text; the delete gate does not judge it. A body that `cat` writes to a file
+# is judged (review, 2026-11-18: the same command can run that file).
+# ub1 CMD -- the body rule, then the gate: passes.
+ub1() {
+  local got
+  got="$("$MK_BASH" -c 'set -f; . "$1"; MK_ROOT=/Users/u/p; _MK_GS_PROOT=/Users/u/p; _MK_GS_CWD=/Users/u/p; _MK_GS_DEL_SCR=; _MK_GS_DEL_INIT=1
+    _mk_gs_del_body "$2"; _mk_gs_del_hit "$_MK_GS_DEL_BODY"; echo "$? $_MK_GS_DEL_WHY $_MK_GS_DEL_WORD"' _ "$BATS_TEST_TMPDIR/del.sh" "$1")"
+  case "$got" in "1 "*) ;; *) echo "unit: $1 -> '$got' (want pass)"; return 1 ;; esac
+}
+# ub CMD WHY WORD -- the body rule, then the gate: rc 0, the class, the word.
+ub() {
+  local got
+  got="$("$MK_BASH" -c 'set -f; . "$1"; MK_ROOT=/Users/u/p; _MK_GS_PROOT=/Users/u/p; _MK_GS_CWD=/Users/u/p; _MK_GS_DEL_SCR=; _MK_GS_DEL_INIT=1
+    _mk_gs_del_body "$2"; _mk_gs_del_hit "$_MK_GS_DEL_BODY"; echo "$? $_MK_GS_DEL_WHY $_MK_GS_DEL_WORD"' _ "$BATS_TEST_TMPDIR/del.sh" "$1")"
+  [ "$got" = "0 $2 $3" ] || { echo "unit: $1 -> '$got' (want '0 $2 $3')"; return 1; }
+}
+# ubk CMD -- the body rule keeps CMD whole (nothing is dropped).
+ubk() {
+  local got
+  got="$("$MK_BASH" -c 'set -f; . "$1"; _mk_gs_del_body "$2"; [ "$_MK_GS_DEL_BODY" = "$2" ] && echo same' _ "$BATS_TEST_TMPDIR/del.sh" "$1")"
+  [ "$got" = same ] || { echo "unit: a body was dropped from: $1"; return 1; }
+}
+# hd OPENER BODY [AFTER] -- a command: the opener line, the body, the end line
+# END, then AFTER (default: a harmless delete). Built here so that no test
+# holds a literal heredoc.
+hd() {
+  printf '%s\n%s\nEND\n%s' "$1" "$2" "${3-rm -f a.o}"
+}
+# A body no shell could pass: an expansion, a bare word, a path outside.
+BODY='import os; s=open("a").read()
+rm -rf ~/x $HOME .. /etc run('
+BAD='x = 1
+rm -rf ~/x'
+
+@test "unit: a quoted heredoc body for python or node is not judged" {
+  local o
+  for o in "python3 - <<'END'" "python3 <<'END'" "python - <<'END'" "node - <<'END'" 'node <<"END"' "python3 - << 'END'" \
+    "cd src && python3 - <<'END'" "ls; node - <<'END'" "  python3 - <<'END'  "; do
+    ub1 "$(hd "$o" "$BODY")" || return 1
+  done
+  # The trigger word only in the body: nothing to judge.
+  ub1 "$(hd "python3 - <<'END'" 'rm -rf ~' '')" || return 1
+  # Two bodies, and another tag.
+  ub1 "$(printf '%s\n%s\nPY_1\n%s' "python3 - <<'PY_1'" "$BODY" "$(hd "node - <<'END'" "$BODY" 'mv c.txt b.txt')")" || return 1
+  # A line that only looks like the end (a blank after it, or before it) is body.
+  ub1 "$(hd "python3 - <<'END'" "END $(printf '\n') END$(printf '\n')rm -rf ~/x")" || return 1
+}
+
+@test "unit: shell text after a heredoc body is judged as before" {
+  ub "$(hd "python3 - <<'END'" 'x = 1' 'rm -rf ~/x')" EXPANSION '~/x' || return 1
+  ub "$(hd "node - <<'END'" 'x' 'rm -rf /etc/x')" OUTSIDE /etc/x || return 1
+}
+
+@test "unit: a heredoc that is not on the list keeps its body judged" {
+  local o
+  for o in "python3 - <<END" "bash <<'END'" "sh -s <<'END'" "zsh <<'END'" "python3 -c x <<'END'" "python3 - a <<'END'" "python3 x.py <<'END'" \
+    "sudo python3 - <<'END'" "env python3 - <<'END'" "X=1 python3 - <<'END'" "do python3 - <<'END'" "/usr/bin/python3 - <<'END'" "PYTHON3 - <<'END'" \
+    "cat <<'END'" "cat <<'END' | sh" "cat - > a.txt <<'END'" "tee a.txt <<'END'" "cat > a.txt b.txt <<'END'" "cat > a.txt <<'END' ; sh a.txt" \
+    "cat > notes.txt <<'END'" "cat >> src/a.md <<'END'" "cat <<'END' > src/a.md" "cat >/Users/u/p/src/x.py <<'END'" "ls; cat > a.txt <<'END'" \
+    "cat > /dev/stdout <<'END'" "cat > /DEV/stdout <<'END'" "cat > //dev/stdout <<'END'" "cat > /./dev/stdout <<'END'" "cat > /proc/self/fd/1 <<'END'" \
+    "cat > ../../dev/stdout <<'END'" "cat > a/../../dev/stdout <<'END'" "cat > ./a.txt <<'END'" 'cat > $f <<'"'END'" "cat >&2 <<'END'" "cat > a* <<'END'" "cat > ~/a <<'END'" \
+    "python3 - <<-'END'" "python3 - <<<'END'" "python3 - <<'END' <<'B'" "python3 - <<'E-D'" 'python3 - <<\END' "python3 - <<  'END'" \
+    "python3 - <<'END' && true" "python3 - <<'END' | sh" "python3 - <<'END' 2>&1" "python3 - 2>e.log <<'END'" "true & python3 - <<'END'" "true || python3 - <<'END'" \
+    'echo "x"; python3 - <<'"'END'" "echo 'x'; python3 - <<'END'" 'echo \x; python3 - <<'"'END'" 'echo `x`; python3 - <<'"'END'" "# python3 - <<'END'" "true # c; python3 - <<'END'" \
+    "{ true; cat > a.txt <<'END'" "(python3 - <<'END'" "f() python3 - <<'END'" "true | python3 - <<'END'" "alias python3=sh; python3 - <<'END'" "function python3; python3 - <<'END'"; do
+    ubk "$(hd "$o" "$BAD")" || return 1
+  done
+}
+
+@test "unit: text before the heredoc that could change how the shell reads it switches the rule off" {
+  local o nl='
+'
+  for o in 'echo "open' "echo 'open" 'echo x \' 'true # note' 'alias python3=sh' 'python3() { sh; }' 'true | cat' 'x=`date`' 'bash <<X' "cat <<'X'${nl}X" \
+    ': $[ 1 +' 'a[1 +' 'echo $((1 +' '[[ a ==' 'echo $x' 'ls ~' 'echo !x' 'ls [ab]' 'PATH=/tmp/e:/bin' 'path=/tmp/e' 'cdpath=/tmp' 'Path=x' 'export X=1' 'hash -p /bin/sh python3' 'ln -s /bin/sh python3' \
+    'BASH_ENV=x true' '. ./env.sh' 'true; . env.sh' 'source env.sh' 'eval x' 'exec 3>a' 'set -k' 'setopt aliases' 'enable -n cd' 'builtin cd src' 'command -p ls' 'trap x 0' 'declare -f' 'café'; do
+    ubk "$o${nl}$(hd "python3 - <<'END'" 'rm -rf ~/x')" || return 1
+  done
+  # A << that the shell reads as a shift, not a heredoc (review, 2026-11-18):
+  # the lines after it are commands.
+  ubk ": \$[ 1 +${nl}python3 <<\"E\"${nl}] ; rm -rf /Users/u/p${nl}E${nl}echo after" || return 1
+  ub ": \$[ 1 +${nl}python3 <<\"E\"${nl}] ; rm -rf /Users/u/p${nl}E${nl}echo after" EXPANSION '$[' || return 1
+  ubk "a[1 +${nl}python3 <<\"E\"${nl}]=5 ; rm -rf /Users/u/p${nl}E${nl}echo after" || return 1
+  ub "a[1 +${nl}python3 <<\"E\"${nl}]=5 ; rm -rf /Users/u/p${nl}E${nl}echo after" OUTSIDE /Users/u/p || return 1
+  # Plain text before the opener keeps the rule on.
+  ub1 "ls src; mkdir -p out/a && touch out/a/x.txt >/dev/null 2>&1${nl}$(hd "python3 - <<'END'" 'rm -rf ~/x')" || return 1
+  # A body that cat writes to a file is judged, whatever follows it: the
+  # command can run the file without naming it as written (review, 2026-11-18).
+  for o in 'sh x.sh' 'sh x.s[h]' 'sh X.SH' 'make' 'rm -f y.sh' 'true'; do
+    ubk "$(hd "cat > x.sh <<'END'" 'rm -rf ~/x' "$o")" || return 1
+    ubk "$(hd "cat <<'END' >> out/x.sh" 'rm -rf ~/x' "$o")" || return 1
+  done
+  ubk "for i in 1 2; do sh x.sh; $(hd "cat > x.sh <<'END'" 'rm -rf ~/x' 'done')" || return 1
+  ubk "for i in 1; do cd /dev; $(hd "cat > stdout <<'END'" 'rm -rf ~/x' 'done | sh')" || return 1
+  ub "$(hd "cat > x.sh <<'END'" 'rm -rf ~/x' 'sh x.s[h]')" EXPANSION '~/x' || return 1
+  # No end line: nothing is dropped.
+  ubk "python3 - <<'END'${nl}rm -rf ~/x${nl}rm -f a.o" || return 1
+  ub "python3 - <<'END'${nl}rm -rf ~/x${nl}rm -f a.o" EXPANSION '~/x' || return 1
+  ub "python3 - <<'END'${nl}rm -rf ~/x${nl} END${nl}rm -f a.o" EXPANSION '~/x' || return 1
+  # After a body, the same conditions hold for the next one.
+  ub "$(hd "python3 - <<'END'" 'x' 'echo "y"')${nl}$(hd "python3 - <<'END'" 'rm -rf ~/x')" EXPANSION '~/x' || return 1
+}
+
+@test "e2e: a python heredoc body is not judged by the delete gate; a shell's or cat's is" {
+  allowed "$(hd "cd $ROOT; python3 - <<'END'" "p='README.md'; s=open(p).read()
+s=s.replace('rm old', 'mv new')
+open(p,'w').write(s)" 'rm -f README.md.bak')" || return 1
+  denied "$(hd "cat > notes.txt <<'END'" 'rm -rf $HOME is what not to run (see ../docs)' 'mv old.txt src/old.txt')" || return 1
+  denied "$(hd "cat > x.sh <<'END'" 'rm -rf ~/x' 'sh x.s[h]')" || return 1
+  denied "$(hd "cat > Makefile <<'END'" 'all:; rm -rf ~/x' 'make')" || return 1
+  denied "$(hd "bash <<'END'" 'rm -rf ~/x' '')" || return 1
+  denied "$(hd "python3 - <<END" 'rm -rf ~/x')" || return 1
+  denied "$(hd "python3 - <<'END'" 'x = 1' "rm -rf $ROOT")" || return 1
+  # The other gates still read the body.
+  denied "$(hd "cat > notes.txt <<'END'" 'x' 'rm -f .claude/memokit.json')" || return 1
+}
+
+# 0.8.6: a view that ends in a newline is not judged a second time as its flat
+# view; the verdicts are those of the same command without the newline.
+@test "e2e: a newline at the end, and a backslash-newline, change no verdict" {
+  local c nl='
+'
+  for c in "rm -rf dist" "rm -f src/a.o \\${nl}  src/b.o" "ls src \\${nl}  tests" "mv src/a.ts \\${nl}src/b.ts"; do
+    allowed "$c" || return 1
+    allowed "$c$nl" || return 1
+  done
+  for c in "rm -rf $ROOT" "rm -rf \\${nl}$ROOT" "mv -t /tmp/x \\${nl}\$PWD" "rm -rf dist \\${nl}.claude" "rm -rf src/../.." "rm \\${nl}-rf ~/x" "r\\${nl}m -rf $ROOT"; do
+    denied "$c" || return 1
+    denied "$c$nl" || return 1
+    denied "$c$nl$nl" || return 1
+  done
 }

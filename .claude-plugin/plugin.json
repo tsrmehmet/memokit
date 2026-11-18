@@ -1,6 +1,6 @@
 {
   "name": "memokit",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "description": "Orchestrator/coder guardrails, session rituals (handoff/resume) and a context budget for Claude Code, configured per project.",
   "author": { "name": "Mehmet Taşar" },
   "license": "MIT",

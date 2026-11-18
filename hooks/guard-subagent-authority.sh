@@ -2046,7 +2046,12 @@ function judge(w,   t, a, n, c, i, p, k, k2, first, gd, lc, pre, cc, d, n2) {
       if (n2 == 3 && d[1] == ".claude" && d[2] == "worktrees" && gpos(w) == 0) return "OUTSIDE"
       return below(d, n2, w)
     }
-    for (i = 1; i <= nS; i++) if (index(p, S[i] "/") == 1) return ""
+    # A root, or an ancestor of one (a project that lies inside the
+    # scratchpad or a temp tree), is never harmless.
+    for (i = 1; i <= nR; i++) if (under(R[i], p)) return "OUTSIDE"
+    # The session scratchpad and everything below it (0.8.6: the scratchpad
+    # itself too, `rm -rf <sp>/x; ls <sp>`).
+    for (i = 1; i <= nS; i++) if (under(p, S[i])) return ""
     # Below a temp tree only. First a Claude tree (another session or a
     # TMPDIR-based one): a component that starts with claude- or that holds a
     # glob whose literal prefix can start it, at any depth, is OUTSIDE. This
@@ -2149,6 +2154,7 @@ function gm(p, s,   pi, si, np, ns, star, ss, pc, b) {
 BEGIN {
   MK = "\001"
   nR = load("MK_D_ROOTS", R); nS = load("MK_D_SCR", S); nC = load("MK_D_CWDS", C)
+  LEAD = ENVIRON["MK_D_LEAD"]
   # A temp tree stays out of the harmless set when the root or the cwd lies
   # at or below it (either spelling of /tmp and of /var/folders).
   skA = 0; skB = 0
@@ -2231,9 +2237,14 @@ END {
   if (cb) { print "HIT\tBARE\t(control byte)"; exit 0 }
   if (gp != "") { gsub(/\002/, "", gp); print "HIT\tBARE\t" gp; exit 0 }
   why = ""; word = ""
+  # The lead word (0.8.6, _mk_gs_del_lead): the target of a cd that opens the
+  # command is excused, only as the second word of this view, after the word
+  # cd and before a separator. A view that reads otherwise excuses nothing.
+  sk = (LEAD != "" && nw >= 3 && W[1] == "cd" && W[2] == LEAD && W[3] == MK) ? 2 : 0
   fs = 0
   for (i = 1; i <= nw && why == ""; i++) {
     if (W[i] == MK) { fs = 0; continue }
+    if (i == sk) continue
     c = judge(W[i])
     # A glob in a find start directory (before its first option) is BARE.
     if (c == "" && fs && gpos(W[i]) > 0) c = "BARE"
@@ -2264,7 +2275,7 @@ END {
     if (W[i] == MK) continue
     if (L[i] == "xargs" || L[i] == "parallel") { why = "PIPE"; word = W[i] }
     else if (L[i] == "cd" || L[i] == "pushd" || L[i] == "popd") {
-      if (W[i + 1] == MK || substr(W[i + 1], 1, 1) == "-" || judge(W[i + 1]) != "") { why = "PIPE"; word = W[i] }
+      if (i + 1 != sk && (W[i + 1] == MK || substr(W[i + 1], 1, 1) == "-" || judge(W[i + 1]) != "")) { why = "PIPE"; word = W[i] }
     }
   }
   if (why == "") {
@@ -2280,7 +2291,39 @@ END {
   exit 0
 }'
 _MK_GS_DEL_SCR=""; _MK_GS_DEL_INIT=0; _MK_GS_DEL_WHY=""; _MK_GS_DEL_WORD=""
-_MK_GS_DEL_PWHY=""; _MK_GS_DEL_PWORD=""
+_MK_GS_DEL_PWHY=""; _MK_GS_DEL_PWORD=""; _MK_GS_DEL_LEAD=""
+# _mk_gs_del_lead CMD -- the lead word of CMD into _MK_GS_DEL_LEAD (0.8.6;
+# none: empty). CMD is the command as the hook receives it, before any view
+# is made. It has a lead word T when it begins, byte for byte, with `cd`, one
+# space and T, where T is a spelling of the project root, or one followed by
+# /.claude/worktrees/<lane> (one component, not . or ..), and T is followed
+# (after at most one space) by ; && or a newline. Nothing stands before that
+# cd, so T is its target and no other command's operand. T holds only bytes
+# the shell reads literally (a root with any other byte has no lead word).
+# Only the first 2048 bytes are read: a cut T fails the awk's word test.
+_mk_gs_del_lead() {
+  local LC_ALL=C h r t rest lane nl='
+'
+  _MK_GS_DEL_LEAD=""
+  case "$1" in 'cd /'*) ;; *) return 0 ;; esac
+  h="${1:0:2048}"
+  for r in "${MK_ROOT:-}" "${_MK_GS_PROOT:-}"; do
+    case "$r" in /?*) ;; *) continue ;; esac
+    case "$r" in *[!A-Za-z0-9_./@%+,:-]*) continue ;; esac
+    case "$h" in "cd $r"*) ;; *) continue ;; esac
+    t="$r"; rest="${h#"cd $r"}"
+    case "$rest" in
+      /.claude/worktrees/*)
+        lane="${rest#/.claude/worktrees/}"; lane="${lane%%[!A-Za-z0-9_.@%+,:-]*}"
+        case "$lane" in ''|.|..) continue ;; esac
+        t="$r/.claude/worktrees/$lane"; rest="${rest#"/.claude/worktrees/$lane"}" ;;
+    esac
+    case "$rest" in
+      ';'*|' ;'*|'&&'*|' &&'*|"$nl"*|" $nl"*) _MK_GS_DEL_LEAD="$t"; return 0 ;;
+    esac
+  done
+  return 0
+}
 # _mk_gs_del_scr -- once: the session scratchpad spellings (lib/temp.sh,
 # physical and logical) into _MK_GS_DEL_SCR. A failing lookup leaves none.
 _mk_gs_del_scr() {
@@ -2297,10 +2340,87 @@ $MK_TEMP_ROOT_LOGICAL/$MK_TEMP_SLUG/$MK_TEMP_SESSION_ID/scratchpad"
   fi
   return 0
 }
+# _mk_gs_del_body VIEW -- the text the delete gate judges for VIEW, into
+# _MK_GS_DEL_BODY (0.8.6): VIEW without the bodies of the heredocs that are
+# provably not shell text; VIEW itself when there is none, or on any doubt.
+# A body is dropped (its end line stays) only when all of this holds:
+# - the opener line holds one `<<`, followed (after at most one blank) by a
+#   quoted tag of letters, digits and underscores ('TAG' or "TAG": the shell
+#   expands nothing in the body), and no `<<-` or `<<<`;
+# - the simple command that holds it (from the line start, or after the last
+#   `;` or `&&`) is exactly `python3`, `python` or `node`, alone or with `-`,
+#   and nothing follows the tag. So the body is a program read by an
+#   interpreter, wherever that command stands (a loop, a group). A body that
+#   `cat` writes to a file is judged: the same command can run that file in
+#   too many spellings (`sh x.s[h]`, `make`, a loop that names it earlier);
+# - all shell text before it (body lines aside) is plain: only letters,
+#   digits, blanks and `_ . / @ % + , : ; & < > = * ? -` (so no quote,
+#   backslash, backquote, `#`, `$`, `|`, `~`, `!` and no bracket of any kind:
+#   one of those can make the opener line a comment, a string, an arithmetic
+#   or subscript text where `<<` is a shift (`$[ 1 +`, `a[1 +`), and the
+#   "body" real commands), none of the words alias unalias function hash
+#   enable builtin command exec eval source export typeset declare set
+#   setopt shopt trap ln, no `.` command, no `PATH` in any letter case (zsh
+#   ties `path` to it) or `ENV` (they can make the name python3 something
+#   else), and no heredoc that did not qualify;
+# - a line that is exactly the tag ends it (no end line: nothing is dropped).
+# Only the delete gate reads this text; every other gate reads the view.
+# shellcheck disable=SC2016  # an awk program
+_MK_GS_BODY_AWK='
+function dirty(s) {
+  if (s ~ /[^A-Za-z0-9_ \t.\/@%+,:;&<>=*?-]/) return 1
+  if ((" " s " ") ~ /[^A-Za-z0-9_](alias|unalias|function|hash|enable|builtin|command|exec|eval|source|export|typeset|declare|set|setopt|shopt|trap|ln)[^A-Za-z0-9_]/) return 1
+  if ((" " s) ~ /[ \t;&]\.[ \t]/) return 1
+  if (index(toupper(s), "PATH") > 0 || index(s, "ENV") > 0) return 1
+  return 0
+}
+function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+# The tag of a qualifying opener line, "" if the line does not qualify.
+function opener(l,   i, pre, rest, t, c, j, k) {
+  i = index(l, "<<")
+  rest = substr(l, i + 2)
+  if (index(rest, "<") > 0) return ""
+  pre = substr(l, 1, i - 1)
+  if (!match(rest, /^[ \t]?(\047[A-Za-z0-9_]+\047|"[A-Za-z0-9_]+")/)) return ""
+  t = substr(rest, 1, RLENGTH); rest = substr(rest, RLENGTH + 1)
+  sub(/^[ \t]/, "", t); t = substr(t, 2, length(t) - 2)
+  if (dirty(pre) || dirty(rest)) return ""
+  c = pre
+  for (;;) {
+    j = index(c, ";"); k = index(c, "&&")
+    if (j == 0 && k == 0) break
+    if (j > 0 && (k == 0 || j < k)) c = substr(c, j + 1); else c = substr(c, k + 2)
+  }
+  c = trim(c); rest = trim(rest)
+  if (c ~ /^(python3|python|node)([ \t]+-)?$/ && rest == "") return t
+  return ""
+}
+{
+  if (inb) { if ($0 == tag) { inb = 0; print }; next }
+  if (!off) {
+    if (index($0, "<<") > 0) {
+      tag = opener($0)
+      if (tag == "") off = 1; else inb = 1
+    } else if (dirty($0)) off = 1
+  }
+  print
+}
+END { if (inb) exit 3 }'
+_MK_GS_DEL_BODY=""
+_mk_gs_del_body() {
+  local out
+  _MK_GS_DEL_BODY="$1"
+  case "$1" in *'<<'*) ;; *) return 0 ;; esac
+  out="$(printf '%s\n' "$1" | LC_ALL=C awk "$_MK_GS_BODY_AWK" 2>/dev/null && printf x)" || return 0
+  case "$out" in *x) ;; *) return 0 ;; esac
+  out="${out%x}"; _MK_GS_DEL_BODY="${out%
+}"
+  return 0
+}
 # _mk_gs_del_run VIEW -- the awk's one line: OK, or HIT<TAB>WHY<TAB>WORD.
 _mk_gs_del_run() {
   printf '%s\n' "$1" | MK_D_ROOTS="${MK_ROOT:-}
-${_MK_GS_PROOT:-}" MK_D_SCR="$_MK_GS_DEL_SCR" MK_D_CWDS="$_MK_GS_CWD
+${_MK_GS_PROOT:-}" MK_D_LEAD="$_MK_GS_DEL_LEAD" MK_D_SCR="$_MK_GS_DEL_SCR" MK_D_CWDS="$_MK_GS_CWD
 ${_mk_gs_pcwd:-}" LC_ALL=C awk "$_MK_GS_DEL_AWK"
 }
 _mk_gs_del_hit() {
@@ -2363,7 +2483,31 @@ _mk_gs_del_deny() {
   esac
 }
 # --- DEL-GATE END -----------------------------------------------------------
-# _mk_gs_cfg_set VIEW FIRST -- the config gate, then the settings gate (its
+# _mk_gs_del_set TEXT FIRST -- the delete gate on TEXT.
+_mk_gs_del_set() {
+  local src
+  _mk_gs_del_hit "$1"; src=$?
+  [ "$src" = 2 ] && deny "$(mk_msg GS_TOO_LARGE "$2")"
+  # Not denied yet: a later view may hit the old config gate or the settings
+  # gate, and those texts win; the first new hit is denied after every view.
+  if [ "$src" = 0 ] && [ -z "$_MK_GS_DEL_PWHY" ]; then
+    _MK_GS_DEL_PWHY="$_MK_GS_DEL_WHY"; _MK_GS_DEL_PWORD="$_MK_GS_DEL_WORD"
+  fi
+  return 0
+}
+# _mk_gs_flat TEXT -- the flat view of TEXT on stdout (rc 1: cannot be made).
+_mk_gs_flat() {
+  local fv="$1"
+  # A word made only of blank/empty quote pairs becomes MKQ before flattening
+  # (the flat view would turn it into blanks and a bare redirect operator
+  # would then consume the command word).
+  case "$1" in
+    *'"'*|*"'"*) fv="$(printf '%s' "$1" | LC_ALL=C sed -E "$_MK_GS_MKQ_SED"; printf x)" && fv="${fv%x}" || fv="$1" ;;
+  esac
+  command -v mk_careful_flat >/dev/null 2>&1 || return 1
+  mk_careful_flat "$fv" 2>/dev/null
+}
+# _mk_gs_cfg_set VIEW FIRST [nodel] -- the config gate, then the settings gate (its
 # bounds are checked first; a settings write is named as such even when the
 # config gate also hits, as a $HOME/.claude word does), then the plugin gate.
 _mk_gs_cfg_set() {
@@ -2379,14 +2523,9 @@ _mk_gs_cfg_set() {
   [ "$rc" = 0 ] && deny "$(mk_msg GS_CONFIG_EDIT "$2")"
   [ "$src" = 3 ] && deny "$(mk_msg GS_SETTINGS_EDIT "$2")"
   # The coarse delete/move gate (0.8.5): after the settings and old config
-  # denies, before the plugin gate.
-  _mk_gs_del_hit "$1"; src=$?
-  [ "$src" = 2 ] && deny "$(mk_msg GS_TOO_LARGE "$2")"
-  # Not denied yet: a later view may hit the old config gate or the settings
-  # gate, and those texts win; the first new hit is denied after every view.
-  if [ "$src" = 0 ] && [ -z "$_MK_GS_DEL_PWHY" ]; then
-    _MK_GS_DEL_PWHY="$_MK_GS_DEL_WHY"; _MK_GS_DEL_PWORD="$_MK_GS_DEL_WORD"
-  fi
+  # denies, before the plugin gate. With NODEL the caller runs it itself, on
+  # the view without its non-shell heredoc bodies (_mk_gs_del_body).
+  [ "${3:-}" = nodel ] || _mk_gs_del_set "$1" "$2"
   _mk_gs_plug_hit "$1"; src=$?
   [ "$src" = 2 ] && deny "$(mk_msg GS_TOO_LARGE "$2")"
   [ "$src" = 0 ] && deny "$(mk_msg GS_PLUGIN_EDIT "$2")"
@@ -2400,6 +2539,7 @@ _mk_gs_cfg_set() {
 # judged as written AND with the lines joined, and denied if either hits.
 _mk_gs_rule3() {
   local out
+  _mk_gs_del_lead "$1"
   _mk_gs_rule3_one "$1"
   # shellcheck disable=SC1003  # a lone backslash
   case "$1" in
@@ -2411,29 +2551,32 @@ _mk_gs_rule3() {
   esac
 }
 _mk_gs_rule3_one() {
-  local view="$1" first flat out line seg rc fv
+  local view="$1" first flat out line seg rc dv nd=""
   # The first line, by sed: ${view%%<newline>*} on a 64 KiB view took 0.6 s
   # under a UTF-8 locale (bash 3.2).
   first="$(printf '%s\n' "$view" | sed -n 1p)"
   [ "${#view}" -le "$MK_GS_MAX_CHARS" ] || deny "$(mk_msg GS_TOO_LARGE "$first")"
   if _mk_gs_win_hit "$view"; then deny "$(mk_msg GS_WINDOW_REQUEST "$first")"; fi
   if _mk_gs_ss_hit "$view"; then deny "$(mk_msg GS_SESSION_START "$first")"; fi
-  _mk_gs_cfg_set "$view" "$first"
-  # A word made only of blank/empty quote pairs becomes MKQ before flattening
-  # (the flat view would turn it into blanks and a bare redirect operator
-  # would then consume the command word).
-  fv="$view"
-  case "$view" in
-    *'"'*|*"'"*) fv="$(printf '%s' "$view" | LC_ALL=C sed -E "$_MK_GS_MKQ_SED"; printf x)" && fv="${fv%x}" || fv="$view" ;;
-  esac
-  if ! command -v mk_careful_flat >/dev/null 2>&1 || ! flat="$(mk_careful_flat "$fv" 2>/dev/null)"; then
-    deny "$(mk_msg GS_WINDOW_REQUEST "$first")"
-  fi
-  # (A flat view equal to the view was checked just above.)
-  if [ "$flat" != "$view" ]; then
+  # The delete gate reads the view without its non-shell heredoc bodies
+  # (0.8.6); when that text differs it is judged apart, below.
+  _mk_gs_del_body "$view"; dv="$_MK_GS_DEL_BODY"
+  [ "$dv" = "$view" ] || nd=nodel
+  _mk_gs_cfg_set "$view" "$first" "$nd"
+  flat="$(_mk_gs_flat "$view")" || deny "$(mk_msg GS_WINDOW_REQUEST "$first")"
+  # (A flat view equal to the view was checked just above. The command
+  # substitution drops a newline at the end, which changes no line and no
+  # word: a view that differs from its flat view only by that one, as every
+  # joined view does, is not judged twice. 0.8.6.)
+  if [ "$flat" != "$view" ] && [ "$flat$_MK_GS_NL" != "$view" ]; then
     if _mk_gs_win_hit "$flat"; then deny "$(mk_msg GS_WINDOW_REQUEST "$first")"; fi
     if _mk_gs_ss_hit "$flat"; then deny "$(mk_msg GS_SESSION_START "$first")"; fi
-    _mk_gs_cfg_set "$flat" "$first"
+    _mk_gs_cfg_set "$flat" "$first" "$nd"
+  fi
+  if [ -n "$nd" ]; then
+    _mk_gs_del_set "$dv" "$first"
+    flat="$(_mk_gs_flat "$dv")" || deny "$(mk_msg GS_WINDOW_REQUEST "$first")"
+    if [ "$flat" != "$dv" ] && [ "$flat$_MK_GS_NL" != "$dv" ]; then _mk_gs_del_set "$flat" "$first"; fi
   fi
   if [ "${MK_REMOTE_ENABLED:-0}" = 1 ]; then
     if command -v mk_remote_scan >/dev/null 2>&1; then

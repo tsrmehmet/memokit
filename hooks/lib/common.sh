@@ -224,6 +224,26 @@ mk_msg() {
   printf "$tpl" "$@"
 }
 
+# mk_lock_take DIR -- take the lock directory DIR; 0 only for the one caller
+# that holds it. mkdir alone is not enough: the mkdir of uutils coreutils
+# 0.10.0 (Ubuntu 26.04) tests for the directory and then creates it, and
+# reports success to two concurrent callers. The owner file inside is made by
+# bash itself under noclobber (open with O_EXCL), which one caller wins. A
+# caller that loses leaves the directory to the winner; when the file could
+# not be made for another reason (a full disk), the rmdir removes the empty
+# directory, so it does not stand as a lock nobody holds.
+mk_lock_take() {
+  mkdir "$1" 2>/dev/null || return 1
+  ( set -o noclobber; : > "$1/o" ) 2>/dev/null && return 0
+  rmdir "$1" 2>/dev/null
+  return 1
+}
+# mk_lock_drop DIR -- release (or remove a stale) lock directory DIR: with
+# its owner file, or the empty directory an older memokit made.
+mk_lock_drop() {
+  rm -f "$1/o" 2>/dev/null
+  rmdir "$1" 2>/dev/null
+}
 mk_tmp() {
   local h
   h="$(printf '%s' "${MK_ROOT:-none}" 2>/dev/null | cksum | cut -d' ' -f1)"

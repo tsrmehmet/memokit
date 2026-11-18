@@ -106,5 +106,5 @@ printf '%s\n%s' "$_rp_old" "$_rp_new" |
   LC_ALL=C awk -v now="${_rp_now:-0}" 'NF == 0 { next }
     match($0, /^\{"t":[0-9.]+[,}]/) { t = substr($0, 6, RLENGTH - 6) + 0; if (now > 0 && t <= now - 600) next }
     { print }' | tail -n "$MK_IG_PERM_LINES" | _mk_state_write "$_rp_f" 2>/dev/null
-rmdir "$_rp_f.lock" 2>/dev/null
+mk_lock_drop "$_rp_f.lock"
 exit 0

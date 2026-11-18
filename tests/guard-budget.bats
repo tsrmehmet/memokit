@@ -736,9 +736,10 @@ EOF")"
 # that names a delete tool, in ONE awk. A 64 KiB list of plain words on one
 # line, and a 32 KiB list split by backslash-newline, are decided (allowed)
 # within 2 s of CPU. The split list is half the size: one backslash-newline
-# makes the guard judge four views of the command instead of one (as in
-# 0.8.4, which is slower on the same input), so a 64 KiB split list reads
-# about 2.1 s of CPU on the macos-26 CI runner (1.3 s on a developer Mac).
+# makes the guard judge three views of the command instead of one (four
+# until 0.8.6), so a 64 KiB split list read about 2.1 s of CPU on the
+# macos-26 CI runner in 0.8.5 (1.2 s on a developer Mac, 1.0 s in 0.8.6;
+# not yet measured again on the runner).
 @test "dg_words: the delete gate decides a 64 KiB subagent list of plain words within 2 s of CPU" {
   mk_project "$BCFG"
   local d="$BATS_TEST_TMPDIR" f n i

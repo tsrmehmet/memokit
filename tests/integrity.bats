@@ -1366,3 +1366,43 @@ chain_two() {
   run "$MK_BASH" -c 'printf "%s" "$2" | "$0" "$1"' "$MK_BASH" "$IH/check-integrity.sh" "$p"
   [ -z "$output" ] || { echo "reordered keys: [$output]"; false; }
 }
+
+# 0.8.6: a mkdir that is not atomic. uutils coreutils 0.10.0 (the mkdir of
+# Ubuntu 26.04) checks, then creates, and reports success to two concurrent
+# callers (197 of 200 pairs in a container). The lock must not rest on
+# mkdir's exit status alone.
+@test "integrity (0.8.6): two concurrent takers with a mkdir that lets both succeed: one holds the lock" {
+  local bin="$BATS_TEST_TMPDIR/bin" real f="$BATS_TEST_TMPDIR/rec" s
+  real="$(command -v mkdir)"
+  "$real" -p "$bin"; : > "$f"
+  # both callers pass the "is it there" test, wait, then both succeed; the
+  # holder keeps the lock for longer than the other one waits (about 1 s)
+  printf '%s\n' '#!/bin/bash' 'sleep 0.3' "exec '$real' -p \"\$@\"" > "$bin/mkdir"
+  chmod +x "$bin/mkdir"
+  for s in A B; do
+    ( PATH="$bin:$PATH" "$MK_BASH" -c '. "$1/lib/common.sh"; . "$1/lib/integrity.sh"
+        if _mk_ig_lock "$2"; then echo took > "$3"; sleep 2; mk_lock_drop "$2.lock"; else echo no > "$3"; fi' \
+        _ "$IH" "$f" "$BATS_TEST_TMPDIR/lk.$s" ) &
+  done
+  wait
+  [ "$(cat "$BATS_TEST_TMPDIR/lk.A" "$BATS_TEST_TMPDIR/lk.B" | grep -c '^took$')" = 1 ] || {
+    echo "takers: $(cat "$BATS_TEST_TMPDIR/lk.A" "$BATS_TEST_TMPDIR/lk.B" | tr '\n' ' ')"; false; }
+  [ ! -e "$f.lock" ] || { echo "lock left behind"; false; }
+}
+
+@test "integrity (0.8.6): a lock taken and dropped leaves nothing; a second taker waits for the drop" {
+  local f="$BATS_TEST_TMPDIR/rec" out
+  : > "$f"
+  out="$("$MK_BASH" -c '. "$1/lib/common.sh"; . "$1/lib/integrity.sh"
+    _mk_ig_lock "$2" || { echo first-failed; exit 0; }
+    ( sleep 0.3; mk_lock_drop "$2.lock" ) &
+    if _mk_ig_lock "$2"; then echo second-took; mk_lock_drop "$2.lock"; else echo second-failed; fi
+    wait' _ "$IH" "$f")"
+  [ "$out" = second-took ] || { echo "$out"; false; }
+  [ ! -e "$f.lock" ]
+  # a held lock (also one made by an older memokit: an empty directory) is not taken
+  mkdir "$f.lock"
+  run "$MK_BASH" -c '. "$1/lib/common.sh"; . "$1/lib/integrity.sh"; mk_lock_take "$2.lock"' _ "$IH" "$f"
+  [ "$status" -ne 0 ]
+  [ -d "$f.lock" ]
+}

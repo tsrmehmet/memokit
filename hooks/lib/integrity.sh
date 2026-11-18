@@ -456,7 +456,7 @@ mk_integrity_perm_ok() {
   fi
   if [ "$lk" = 1 ]; then
     _mk_ig_perm_ok "$@"; rc=$?
-    rmdir "$2.lock" 2>/dev/null
+    mk_lock_drop "$2.lock"
   else
     # No record, or its lock not taken: judge the classes alone.
     _mk_ig_perm_ok "$1" /dev/null "${3:-}" "${4:-}" "${5:-}"; rc=$?
@@ -466,14 +466,15 @@ mk_integrity_perm_ok() {
   return "$rc"
 }
 
-# _mk_ig_lock FILE -- takes FILE.lock (mkdir): 10 tries 100 ms apart (about
+# _mk_ig_lock FILE -- takes FILE.lock (mk_lock_take: a directory with an
+# owner file; released with mk_lock_drop): 10 tries 100 ms apart (about
 # 1 s). Exit 1 when not taken. While the lock is there only the sleep forks
 # (mkdir runs when it is gone): a held lock cost 40 forks with 20 tries, and
 # on a CI runner with slow forks that wait used up the hook's 3.3 s budget.
 # A lock owned by another user fails at once (we cannot remove it, and it
 # is not ours to wait for: the caller gives the full alert, never fail-open).
 # A lock older than 30 s (its holder died) is taken over once, on the first
-# try: takers are serialised by a second mkdir mutex FILE.lock.t, and the
+# try: takers are serialised by a second lock FILE.lock.t, and the
 # age is read again under it, so a taker that judged the lock stale before
 # another one replaced it cannot remove the fresh one. A live holder is
 # never older than 30 s. A FILE.lock.t older than 30 s (its taker died) is
@@ -481,15 +482,15 @@ mk_integrity_perm_ok() {
 _mk_ig_lock() {
   local l="$1.lock" i=0
   while [ "$i" -lt 10 ]; do
-    if [ ! -e "$l" ] && [ ! -L "$l" ]; then mkdir "$l" 2>/dev/null && return 0; fi
+    if [ ! -e "$l" ] && [ ! -L "$l" ]; then mk_lock_take "$l" && return 0; fi
     if [ "$i" = 0 ] && [ -d "$l" ] && [ ! -L "$l" ]; then
       [ -O "$l" ] || return 1
       if _mk_ig_old "$l"; then
-        if mkdir "$l.t" 2>/dev/null; then
-          _mk_ig_old "$l" && rmdir "$l" 2>/dev/null
-          rmdir "$l.t" 2>/dev/null
+        if mk_lock_take "$l.t"; then
+          _mk_ig_old "$l" && mk_lock_drop "$l"
+          mk_lock_drop "$l.t"
         elif [ -d "$l.t" ] && [ ! -L "$l.t" ] && [ -O "$l.t" ] && _mk_ig_old "$l.t"; then
-          rmdir "$l.t" 2>/dev/null
+          mk_lock_drop "$l.t"
         fi
       fi
     fi
